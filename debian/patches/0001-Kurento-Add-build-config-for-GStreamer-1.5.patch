@@ -8,7 +8,7 @@ Subject: Kurento: Add build config for GStreamer 1.5
  2 files changed, 44 insertions(+)
 
 diff --git a/configure.ac b/configure.ac
-index 2a11c5c..e858629 100644
+index 04c1614..0ac44a0 100644
 --- a/configure.ac
 +++ b/configure.ac
 @@ -244,6 +244,11 @@ AC_ARG_WITH(gstreamer,

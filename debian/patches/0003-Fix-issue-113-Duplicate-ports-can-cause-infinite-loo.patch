@@ -1,0 +1,23 @@
+From: Juan Navarro <juan.navarro@gmx.es>
+Date: Fri, 12 Jun 2020 16:20:48 +0200
+Subject: Fix issue 113: Duplicate ports can cause infinite loop
+
+Duplicate ports (HOST_CANDIDATE_DUPLICATE_PORT) can cause infinite loop
+https://gitlab.freedesktop.org/libnice/libnice/-/issues/113
+---
+ agent/agent.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/agent/agent.c b/agent/agent.c
+index 7b25670..c4282b6 100644
+--- a/agent/agent.c
++++ b/agent/agent.c
+@@ -3199,7 +3199,7 @@ nice_agent_gather_candidates (
+             current_port++;
+           if (current_port > component->max_port)
+             current_port = component->min_port;
+-          if (current_port == start_port && res != HOST_CANDIDATE_DUPLICATE_PORT)
++          if (current_port == start_port)
+             break;
+           if (current_port == 0 && res != HOST_CANDIDATE_DUPLICATE_PORT)
+             break;
