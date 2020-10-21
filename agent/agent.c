@@ -81,8 +81,10 @@
 
 #define DEFAULT_STUN_PORT  3478
 #define DEFAULT_UPNP_TIMEOUT 200  /* milliseconds */
+#define DEFAULT_IDLE_TIMEOUT 5000 /* milliseconds */
 
 #define MAX_TCP_MTU 1400 /* Use 1400 because of VPNs and we assume IEE 802.3 */
+
 
 static void
 nice_debug_input_message_composition (const NiceInputMessage *messages,
@@ -120,6 +122,7 @@ enum
   PROP_NOMINATION_MODE,
   PROP_ICE_TRICKLE,
   PROP_SUPPORT_RENOMINATION,
+  PROP_IDLE_TIMEOUT,
 };
 
 
@@ -483,6 +486,51 @@ nice_agent_class_init (NiceAgentClass *klass)
          "corresponding candidates pair gets selected.",
          FALSE,
          G_PARAM_READWRITE));
+
+  /**
+   * NiceAgent:idle-timeout
+   *
+   * A final timeout in msec, launched when the agent becomes idle,
+   * before stopping its activity.
+   *
+   * This timer will delay the decision to set a component as failed.
+   * This delay is added to reduce the chance to see the agent receiving
+   * new stun activity just after the conncheck list has been declared
+   * failed (some valid pairs, no nominated pair, and no in-progress
+   * pairs), reactiviting conncheck activity, and causing a (valid)
+   * state transitions like that: connecting -> failed -> connecting ->
+   * connected -> ready.  Such transitions are not buggy per-se, but may
+   * break the test-suite, that counts precisely the number of time each
+   * state has been set, and doesnt expect these transcient failed
+   * states.
+   *
+   * This timer is also useful when the agent is in controlled mode and
+   * the other controlling peer takes some time to elect its nominated
+   * pair (this may be the case for SfB peers).
+   *
+   * This timer is *NOT* part if the RFC5245, as this situation is not
+   * covered in sect 8.1.2 "Updating States", but deals with a real
+   * use-case, where a controlled agent can not wait forever for the
+   * other peer to make a nomination decision.
+   *
+   * Also note that the value of this timeout will not delay the
+   * emission of 'connected' and 'ready' agent signals, and will not
+   * slow down the behaviour of the agent when the peer agent works
+   * in a timely manner.
+   *
+   * Since: 0.1.17
+   */
+
+  g_object_class_install_property (gobject_class, PROP_IDLE_TIMEOUT,
+      g_param_spec_uint (
+         "idle-timeout",
+         "Timeout before stopping the agent when being idle",
+         "A final timeout in msecs, launched when the agent becomes idle, "
+         "with no in-progress pairs to wait for, before stopping its activity, "
+         "and declaring a component as failed in needed.",
+         50, 60000,
+	 DEFAULT_IDLE_TIMEOUT,
+         G_PARAM_READWRITE | G_PARAM_CONSTRUCT));
 
   /**
    * NiceAgent:proxy-ip:
@@ -1177,17 +1225,17 @@ priv_update_controlling_mode (NiceAgent *agent, gboolean value)
     if (update_controlling_mode) {
       agent->controlling_mode = agent->saved_controlling_mode;
       nice_debug ("Agent %p : Property set, changing role to \"%s\".",
-        agent, agent->controlling_mode ? "controlling" : "controlled");
+          agent, agent->controlling_mode ? "controlling" : "controlled");
     } else {
       nice_debug ("Agent %p : Property set, role switch requested "
-        "but conncheck already started.", agent);
+          "but conncheck already started.", agent);
       nice_debug ("Agent %p : Property set, staying with role \"%s\" "
-        "until restart.", agent,
-        agent->controlling_mode ? "controlling" : "controlled");
+          "until restart.", agent,
+          agent->controlling_mode ? "controlling" : "controlled");
     }
   } else
     nice_debug ("Agent %p : Property set, role is already \"%s\".", agent,
-      agent->controlling_mode ? "controlling" : "controlled");
+        agent->controlling_mode ? "controlling" : "controlled");
 }
 
 static void
@@ -1203,6 +1251,7 @@ nice_agent_init (NiceAgent *agent)
   agent->max_conn_checks = NICE_AGENT_MAX_CONNECTIVITY_CHECKS_DEFAULT;
   agent->nomination_mode = NICE_NOMINATION_MODE_AGGRESSIVE;
   agent->support_renomination = FALSE;
+  agent->idle_timeout = DEFAULT_IDLE_TIMEOUT;
 
   agent->discovery_list = NULL;
   agent->discovery_unsched_items = 0;
@@ -1325,6 +1374,10 @@ nice_agent_get_property (
 
     case PROP_SUPPORT_RENOMINATION:
       g_value_set_boolean (value, agent->support_renomination);
+      break;
+
+    case PROP_IDLE_TIMEOUT:
+      g_value_set_uint (value, agent->idle_timeout);
       break;
 
     case PROP_PROXY_IP:
@@ -1541,6 +1594,10 @@ nice_agent_set_property (
 
     case PROP_SUPPORT_RENOMINATION:
       agent->support_renomination = g_value_get_boolean (value);
+      break;
+
+    case PROP_IDLE_TIMEOUT:
+      agent->idle_timeout = g_value_get_uint (value);
       break;
 
     case PROP_PROXY_IP:
@@ -2129,6 +2186,7 @@ _tcp_sock_is_writable (NiceSocket *sock, gpointer user_data)
   if (component->selected_pair.local == NULL ||
       !nice_socket_is_based_on (component->selected_pair.local->sockptr, sock)) {
     agent_unlock (agent);
+    g_object_unref (agent);
     return;
   }
 
@@ -2178,12 +2236,13 @@ void agent_gathering_done (NiceAgent *agent)
     for (j = stream->components; j; j = j->next) {
       NiceComponent *component = j->data;
 
-      for (k = component->local_candidates; k; k = k->next) {
+      for (k = component->local_candidates; k;) {
         NiceCandidate *local_candidate = k->data;
+        GSList *next = k->next;
 
         if (agent->force_relay &&
             local_candidate->type != NICE_CANDIDATE_TYPE_RELAYED)
-          continue;
+          goto next_cand;
 
 	if (nice_debug_is_enabled ()) {
 	  gchar tmpbuf[INET6_ADDRSTRLEN];
@@ -2195,6 +2254,36 @@ void agent_gathering_done (NiceAgent *agent)
               local_candidate->stream_id, local_candidate->component_id,
               local_candidate->username, local_candidate->password);
 	}
+
+        /* In addition to not contribute to the creation of a pair in the
+         * conncheck list, according to RFC 5245, sect.  5.7.3 "Pruning the
+         * Pairs", it can be guessed from SfB behavior, that server
+         * reflexive pairs are expected to be also removed from the
+         * candidates list, when pairs are formed, so they have no way to
+         * become part of a selected pair with such type.
+         *
+         * It can be observed that, each time a valid pair is discovered and
+         * nominated with a local candidate of type srv-rflx, is makes SfB
+         * fails with a 500 Internal Error.
+         *
+         * On the contrary, when a local srv-rflx candidate is gathered,
+         * normally announced in the sdp, but removed from the candidate
+         * list, in that case, when the *same* candidate is discovered again
+         * later during the conncheck, with peer-rflx type this time, then
+         * it just works.
+         */
+
+        if (agent->compatibility == NICE_COMPATIBILITY_OC2007R2 &&
+            local_candidate->type == NICE_CANDIDATE_TYPE_SERVER_REFLEXIVE) {
+          nice_debug ("Agent %p: removing this previous srv-rflx candidate "
+              "for OC2007R2 compatibility", agent);
+          component->local_candidates =
+              g_slist_remove (component->local_candidates, local_candidate);
+          agent_remove_local_candidate (agent, local_candidate);
+          nice_candidate_free (local_candidate);
+          goto next_cand;
+        }
+
         for (l = component->remote_candidates; l; l = l->next) {
           NiceCandidate *remote_candidate = l->data;
 
@@ -2209,6 +2298,8 @@ void agent_gathering_done (NiceAgent *agent)
                 local_candidate, remote_candidate);
           }
         }
+next_cand:
+        k = next;
       }
     }
   }
@@ -2522,6 +2613,69 @@ priv_add_new_candidate_discovery_stun (NiceAgent *agent,
   ++agent->discovery_unsched_items;
 }
 
+NiceSocket *
+agent_create_tcp_turn_socket (NiceAgent *agent, NiceStream *stream,
+    NiceComponent *component, NiceSocket *nicesock,
+    NiceAddress *server, NiceRelayType type, gboolean reliable_tcp)
+{
+  NiceAddress proxy_server;
+  NiceAddress local_address = nicesock->addr;
+
+  nice_address_set_port (&local_address, 0);
+  nicesock = NULL;
+
+  /* TODO: add support for turn-tcp RFC 6062 */
+  if (agent->proxy_type != NICE_PROXY_TYPE_NONE &&
+      agent->proxy_ip != NULL &&
+      nice_address_set_from_string (&proxy_server, agent->proxy_ip)) {
+    nice_address_set_port (&proxy_server, agent->proxy_port);
+    nicesock = nice_tcp_bsd_socket_new (agent->main_context, &local_address,
+        &proxy_server, reliable_tcp);
+
+    if (nicesock) {
+      _priv_set_socket_tos (agent, nicesock, stream->tos);
+      if (agent->proxy_type == NICE_PROXY_TYPE_SOCKS5) {
+        nicesock = nice_socks5_socket_new (nicesock, server,
+            agent->proxy_username, agent->proxy_password);
+      } else if (agent->proxy_type == NICE_PROXY_TYPE_HTTP){
+        nicesock = nice_http_socket_new (nicesock, server,
+            agent->proxy_username, agent->proxy_password);
+      } else {
+        nice_socket_free (nicesock);
+        nicesock = NULL;
+      }
+    }
+  }
+
+  if (nicesock == NULL) {
+    nicesock = nice_tcp_bsd_socket_new (agent->main_context, &local_address,
+        server, reliable_tcp);
+
+    if (nicesock)
+      _priv_set_socket_tos (agent, nicesock, stream->tos);
+  }
+
+  /* The TURN server may be invalid or not listening */
+  if (nicesock == NULL)
+    return NULL;
+
+  nice_socket_set_writable_callback (nicesock, _tcp_sock_is_writable,
+      component);
+
+  if (type ==  NICE_RELAY_TYPE_TURN_TLS &&
+      agent->compatibility == NICE_COMPATIBILITY_GOOGLE) {
+    nicesock = nice_pseudossl_socket_new (nicesock,
+        NICE_PSEUDOSSL_SOCKET_COMPATIBILITY_GOOGLE);
+  } else if (type == NICE_RELAY_TYPE_TURN_TLS &&
+      (agent->compatibility == NICE_COMPATIBILITY_OC2007 ||
+          agent->compatibility == NICE_COMPATIBILITY_OC2007R2)) {
+    nicesock = nice_pseudossl_socket_new (nicesock,
+        NICE_PSEUDOSSL_SOCKET_COMPATIBILITY_MSOC);
+  }
+  return nice_udp_turn_over_tcp_socket_new (nicesock,
+      agent_to_turn_socket_compatibility (agent));
+}
+
 static void
 priv_add_new_candidate_discovery_turn (NiceAgent *agent,
     NiceSocket *nicesock, TurnServer *turn,
@@ -2529,7 +2683,6 @@ priv_add_new_candidate_discovery_turn (NiceAgent *agent,
 {
   CandidateDiscovery *cdisco;
   NiceComponent *component = nice_stream_find_component_by_id (stream, component_id);
-  NiceAddress local_address;
 
   /* note: no need to check for redundant candidates, as this is
    *       done later on in the process */
@@ -2556,7 +2709,6 @@ priv_add_new_candidate_discovery_turn (NiceAgent *agent,
     }
     cdisco->nicesock = nicesock;
   } else {
-    NiceAddress proxy_server;
     gboolean reliable_tcp = FALSE;
 
     /* MS-TURN will allocate a transport with the same protocol it received
@@ -2567,7 +2719,11 @@ priv_add_new_candidate_discovery_turn (NiceAgent *agent,
      * over which the Allocate request was received; a request that is
      * received over TCP returns a TCP allocated transport address.
      */
-    if (turn_tcp)
+    /* TURN-TCP is currently unsupport unless it's OC2007 compatibliity */
+    /* TODO: Add support for TURN-TCP */
+    if (turn_tcp &&
+        (agent->compatibility == NICE_COMPATIBILITY_OC2007 ||
+         agent->compatibility == NICE_COMPATIBILITY_OC2007R2))
       reliable_tcp = TRUE;
 
     /* Ignore tcp candidates if we disabled ice-tcp */
@@ -2577,71 +2733,13 @@ priv_add_new_candidate_discovery_turn (NiceAgent *agent,
       return;
     }
 
-    /* TURN-TCP is currently unsupport unless it's OC2007 compatibliity */
-    /* TODO: Add support for TURN-TCP */
-    if (((agent->compatibility == NICE_COMPATIBILITY_OC2007 ||
-            agent->compatibility == NICE_COMPATIBILITY_OC2007R2) &&
-            reliable_tcp == FALSE) ||
-        (!(agent->compatibility == NICE_COMPATIBILITY_OC2007 ||
-            agent->compatibility == NICE_COMPATIBILITY_OC2007R2) &&
-            reliable_tcp == TRUE)) {
+    if (turn_tcp == FALSE) {
       g_slice_free (CandidateDiscovery, cdisco);
       return;
     }
 
-    local_address = nicesock->addr;
-    nice_address_set_port (&local_address, 0);
-    nicesock = NULL;
-
-    /* TODO: add support for turn-tcp RFC 6062 */
-    if (agent->proxy_type != NICE_PROXY_TYPE_NONE &&
-        agent->proxy_ip != NULL &&
-        nice_address_set_from_string (&proxy_server, agent->proxy_ip)) {
-      nice_address_set_port (&proxy_server, agent->proxy_port);
-      nicesock = nice_tcp_bsd_socket_new (agent->main_context, &local_address,
-          &proxy_server, reliable_tcp);
-
-      if (nicesock) {
-        _priv_set_socket_tos (agent, nicesock, stream->tos);
-        if (agent->proxy_type == NICE_PROXY_TYPE_SOCKS5) {
-          nicesock = nice_socks5_socket_new (nicesock, &turn->server,
-              agent->proxy_username, agent->proxy_password);
-        } else if (agent->proxy_type == NICE_PROXY_TYPE_HTTP){
-          nicesock = nice_http_socket_new (nicesock, &turn->server,
-              agent->proxy_username, agent->proxy_password);
-        } else {
-          nice_socket_free (nicesock);
-          nicesock = NULL;
-        }
-      }
-
-    }
-    if (nicesock == NULL) {
-      nicesock = nice_tcp_bsd_socket_new (agent->main_context, &local_address,
-          &turn->server, reliable_tcp);
-
-      if (nicesock)
-        _priv_set_socket_tos (agent, nicesock, stream->tos);
-    }
-
-    /* The TURN server may be invalid or not listening */
-    if (nicesock == NULL)
-      return;
-
-    nice_socket_set_writable_callback (nicesock, _tcp_sock_is_writable, component);
-
-    if (turn->type ==  NICE_RELAY_TYPE_TURN_TLS &&
-        agent->compatibility == NICE_COMPATIBILITY_GOOGLE) {
-      nicesock = nice_pseudossl_socket_new (nicesock,
-          NICE_PSEUDOSSL_SOCKET_COMPATIBILITY_GOOGLE);
-    } else if (turn->type == NICE_RELAY_TYPE_TURN_TLS &&
-        (agent->compatibility == NICE_COMPATIBILITY_OC2007 ||
-            agent->compatibility == NICE_COMPATIBILITY_OC2007R2)) {
-      nicesock = nice_pseudossl_socket_new (nicesock,
-          NICE_PSEUDOSSL_SOCKET_COMPATIBILITY_MSOC);
-    }
-    cdisco->nicesock = nice_udp_turn_over_tcp_socket_new (nicesock,
-        agent_to_turn_socket_compatibility (agent));
+    cdisco->nicesock = agent_create_tcp_turn_socket (agent, stream,
+        component, nicesock, &turn->server, turn->type, reliable_tcp);
 
     nice_component_attach_socket (component, cdisco->nicesock);
   }
@@ -2732,6 +2830,7 @@ nice_agent_set_relay_info(NiceAgent *agent,
   NiceStream *stream = NULL;
   gboolean ret = TRUE;
   TurnServer *turn;
+  guint length;
 
   g_return_val_if_fail (NICE_IS_AGENT (agent), FALSE);
   g_return_val_if_fail (stream_id >= 1, FALSE);
@@ -2750,6 +2849,14 @@ nice_agent_set_relay_info(NiceAgent *agent,
     goto done;
   }
 
+  length = g_list_length (component->turn_servers);
+  if (length == NICE_CANDIDATE_MAX_TURN_SERVERS) {
+    g_warning ("Agent %p : cannot have more than %d turn servers.",
+        agent, length);
+    ret = FALSE;
+    goto done;
+  }
+
   turn = turn_server_new (server_ip, server_port, username, password, type);
 
   if (!turn) {
@@ -2762,6 +2869,11 @@ nice_agent_set_relay_info(NiceAgent *agent,
       stream_id, component_id, username,
       nice_debug_is_verbose() ? password : "****");
 
+  /* The turn server preference (used to setup its priority in the
+   * conncheck) is simply its position in the list. The preference must
+   * be unique for each one.
+   */
+  turn->preference = length;
   component->turn_servers = g_list_append (component->turn_servers, turn);
 
  if (stream->gathering_started) {
@@ -2946,6 +3058,7 @@ nice_agent_gather_candidates (
   NiceStream *stream;
   GSList *local_addresses = NULL;
   gboolean ret = TRUE;
+  guint length;
 
   g_return_val_if_fail (NICE_IS_AGENT (agent), FALSE);
   g_return_val_if_fail (stream_id >= 1, FALSE);
@@ -3013,6 +3126,12 @@ nice_agent_gather_candidates (
     }
   }
 
+  length = g_slist_length (local_addresses);
+  if (length > NICE_CANDIDATE_MAX_LOCAL_ADDRESSES) {
+    g_warning ("Agent %p : cannot have more than %d local addresses.",
+        agent, NICE_CANDIDATE_MAX_LOCAL_ADDRESSES);
+  }
+
   for (cid = 1; cid <= stream->n_components; cid++) {
     NiceComponent *component = nice_stream_find_component_by_id (stream, cid);
     gboolean found_local_address = FALSE;
@@ -3028,7 +3147,10 @@ nice_agent_gather_candidates (
       continue;
 
     /* generate a local host candidate for each local address */
-    for (i = local_addresses; i; i = i->next) {
+    length = 0;
+    for (i = local_addresses;
+        i && length < NICE_CANDIDATE_MAX_LOCAL_ADDRESSES;
+        i = i->next, length++) {
       NiceAddress *addr = i->data;
       NiceCandidate *host_candidate;
 
@@ -3067,24 +3189,28 @@ nice_agent_gather_candidates (
         current_port = start_port;
 
         host_candidate = NULL;
-        while (res == HOST_CANDIDATE_CANT_CREATE_SOCKET) {
+        while (res == HOST_CANDIDATE_CANT_CREATE_SOCKET ||
+            res == HOST_CANDIDATE_DUPLICATE_PORT) {
           nice_debug ("Agent %p: Trying to create host candidate on port %d", agent, current_port);
           nice_address_set_port (addr, current_port);
           res =  discovery_add_local_host_candidate (agent, stream->id, cid,
               addr, transport, &host_candidate);
           if (current_port > 0)
             current_port++;
-          if (current_port > component->max_port) current_port = component->min_port;
-          if (current_port == 0 || current_port == start_port)
+          if (current_port > component->max_port)
+            current_port = component->min_port;
+          if (current_port == start_port && res != HOST_CANDIDATE_DUPLICATE_PORT)
+            break;
+          if (current_port == 0 && res != HOST_CANDIDATE_DUPLICATE_PORT)
             break;
         }
 
         if (res == HOST_CANDIDATE_REDUNDANT) {
           nice_debug ("Agent %p: Ignoring local candidate, it's redundant",
-                      agent);
+              agent);
           continue;
         } else if (res == HOST_CANDIDATE_FAILED) {
-          nice_debug ("Agent %p: Could ot retrieive component %d/%d", agent,
+          nice_debug ("Agent %p: Could not retrieve component %d/%d", agent,
               stream->id, cid);
           continue;
         } else if (res == HOST_CANDIDATE_CANT_CREATE_SOCKET) {
@@ -3095,6 +3221,10 @@ nice_agent_gather_candidates (
                 " s%d:%d. Invalid interface?", agent, ip, stream->id,
                 component->id);
           }
+          continue;
+        } else if (res == HOST_CANDIDATE_DUPLICATE_PORT) {
+          nice_debug ("Agent %p: Ignoring local candidate, duplicate port",
+              agent);
           continue;
         }
 
@@ -3285,6 +3415,8 @@ on_stream_refreshes_pruned (NiceAgent *agent, NiceStream *stream)
 
   nice_stream_close (agent, stream);
 
+  agent->pruning_streams = g_slist_remove (agent->pruning_streams, stream);
+
   agent_unlock (agent);
 
   /* Actually free the stream. This should be done with the lock released, as
@@ -3324,6 +3456,8 @@ nice_agent_remove_stream (
   discovery_prune_stream (agent, stream_id);
   refresh_prune_stream_async (agent, stream,
       (NiceTimeoutLockedCallback) on_stream_refreshes_pruned);
+
+  agent->pruning_streams = g_slist_prepend (agent->pruning_streams, stream);
 
   /* Remove the stream and signal its removal. */
   agent->streams = g_slist_remove (agent->streams, stream);
@@ -3382,25 +3516,80 @@ nice_agent_add_local_address (NiceAgent *agent, NiceAddress *addr)
 }
 
 /* Recompute foundations of all candidate pairs from a given stream
- * having a specific remote candidate
+ * having a specific remote candidate, and eventually update the
+ * priority of the selected pair as well.
  */
 static void priv_update_pair_foundations (NiceAgent *agent,
-    guint stream_id, NiceCandidate *remote)
+    guint stream_id, guint component_id, NiceCandidate *remote)
 {
-  NiceStream *stream = agent_find_stream (agent, stream_id);
-  if (stream) {
+  NiceStream *stream;
+  NiceComponent *component;
+
+  if (agent_find_component (agent, stream_id, component_id, &stream,
+      &component)) {
     GSList *i;
+
     for (i = stream->conncheck_list; i; i = i->next) {
       CandidateCheckPair *pair = i->data;
+
       if (pair->remote == remote) {
-        g_snprintf (pair->foundation,
-            NICE_CANDIDATE_PAIR_MAX_FOUNDATION, "%s:%s",
+        gchar foundation[NICE_CANDIDATE_PAIR_MAX_FOUNDATION];
+        g_snprintf (foundation, NICE_CANDIDATE_PAIR_MAX_FOUNDATION, "%s:%s",
             pair->local->foundation, pair->remote->foundation);
-        nice_debug ("Agent %p : Updating pair %p foundation to '%s'",
-            agent, pair, pair->foundation);
+        if (strncmp (pair->foundation, foundation,
+            NICE_CANDIDATE_PAIR_MAX_FOUNDATION)) {
+          g_strlcpy (pair->foundation, foundation,
+              NICE_CANDIDATE_PAIR_MAX_FOUNDATION);
+          nice_debug ("Agent %p : Updating pair %p foundation to '%s'",
+              agent, pair, pair->foundation);
+          if (pair->state == NICE_CHECK_SUCCEEDED)
+            conn_check_unfreeze_related (agent, pair);
+          if (component->selected_pair.local == pair->local &&
+              component->selected_pair.remote == pair->remote) {
+            gchar priority[NICE_CANDIDATE_PAIR_PRIORITY_MAX_SIZE];
+
+            /* the foundation update of the selected pair also implies
+             * an update of its priority. stun_priority doesn't change
+             * because only the remote candidate foundation is modified.
+             */
+            nice_debug ("Agent %p : pair %p is the selected pair, updating "
+                "its priority.", agent, pair);
+            component->selected_pair.priority = pair->priority;
+
+            nice_candidate_pair_priority_to_string (pair->priority, priority);
+            nice_debug ("Agent %p : updating SELECTED PAIR for component "
+                "%u: %s (prio:%s).", agent,
+                component->id, foundation, priority);
+            agent_signal_new_selected_pair (agent, pair->stream_id,
+              component->id, pair->local, pair->remote);
+          }
+        }
       }
     }
   }
+}
+
+/* Returns the nominated pair with the highest priority.
+ */
+static CandidateCheckPair *priv_get_highest_priority_nominated_pair (
+    NiceAgent *agent, guint stream_id, guint component_id)
+{
+  NiceStream *stream;
+  NiceComponent *component;
+  CandidateCheckPair *pair;
+  GSList *i;
+
+  if (agent_find_component (agent, stream_id, component_id, &stream,
+      &component)) {
+
+    for (i = stream->conncheck_list; i; i = i->next) {
+      pair = i->data;
+      if (pair->component_id == component_id && pair->nominated) {
+        return pair;
+      }
+    }
+  }
+  return NULL;
 }
 
 static gboolean priv_add_remote_candidate (
@@ -3416,8 +3605,10 @@ static gboolean priv_add_remote_candidate (
   const gchar *password,
   const gchar *foundation)
 {
+  NiceStream *stream;
   NiceComponent *component;
   NiceCandidate *candidate;
+  CandidateCheckPair *pair;
 
   if (transport == NICE_CANDIDATE_TRANSPORT_UDP &&
       !agent->use_ice_udp)
@@ -3426,7 +3617,8 @@ static gboolean priv_add_remote_candidate (
       !agent->use_ice_tcp)
     return FALSE;
 
-  if (!agent_find_component (agent, stream_id, component_id, NULL, &component))
+  if (!agent_find_component (agent, stream_id, component_id, &stream,
+      &component))
     return FALSE;
 
   /* step: check whether the candidate already exists */
@@ -3438,6 +3630,10 @@ static gboolean priv_add_remote_candidate (
     nice_debug ("Agent %p : Updating existing peer-rfx remote candidate to %s",
         agent, _cand_type_to_sdp (type));
     candidate->type = type;
+    /* The updated candidate is no more peer reflexive, so its
+     * sockptr can be cleared
+     */
+    candidate->sockptr = NULL;
     /* If it got there, the next one will also be ran, so the foundation
      * will be set.
      */
@@ -3448,7 +3644,7 @@ static gboolean priv_add_remote_candidate (
       gchar tmpbuf[INET6_ADDRSTRLEN];
       nice_address_to_string (addr, tmpbuf);
       nice_debug ("Agent %p : Updating existing remote candidate with addr [%s]:%u"
-          " for s%d/c%d. U/P '%s'/'%s' prio: %u", agent, tmpbuf,
+          " for s%d/c%d. U/P '%s'/'%s' prio: %08x", agent, tmpbuf,
           nice_address_get_port (addr), stream_id, component_id,
           username, password, priority);
     }
@@ -3487,10 +3683,30 @@ static gboolean priv_add_remote_candidate (
 
     /* since the type of the existing candidate may have changed,
      * the pairs priority and foundation related to this candidate need
-     * to be recomputed.
+     * to be recomputed...
      */
     recalculate_pair_priorities (agent);
-    priv_update_pair_foundations (agent, stream_id, candidate);
+    priv_update_pair_foundations (agent, stream_id, component_id, candidate);
+    /* ... and maybe we now have another nominated pair with a higher
+     * priority as the result of this priorities update.
+     */
+    pair = priv_get_highest_priority_nominated_pair (agent,
+        stream_id, component_id);
+    if (pair &&
+        (pair->local != component->selected_pair.local ||
+         pair->remote != component->selected_pair.remote)) {
+      /* If we have (at least) one pair with the nominated flag set, it
+       * implies that this pair (or another) is set as the selected pair
+       * for this component. In other words, this is really an *update*
+       * of the selected pair.
+       */
+      g_assert (component->selected_pair.local != NULL);
+      g_assert (component->selected_pair.remote != NULL);
+      nice_debug ("Agent %p : Updating selected pair with higher "
+          "priority nominated pair %p.", agent, pair);
+      conn_check_update_selected_pair (agent, component, pair);
+    }
+    conn_check_update_check_list_state_for_ready (agent, stream, component);
   }
   else {
     /* case 2: add a new candidate */
@@ -3500,8 +3716,6 @@ static gboolean priv_add_remote_candidate (
       return FALSE;
     }
     candidate = nice_candidate_new (type);
-    component->remote_candidates = g_slist_append (component->remote_candidates,
-        candidate);
 
     candidate->stream_id = stream_id;
     candidate->component_id = component_id;
@@ -3515,7 +3729,7 @@ static gboolean priv_add_remote_candidate (
       if (addr)
         nice_address_to_string (addr, tmpbuf);
       nice_debug ("Agent %p : Adding %s remote candidate with addr [%s]:%u"
-          " for s%d/c%d. U/P '%s'/'%s' prio: %u", agent,
+          " for s%d/c%d. U/P '%s'/'%s' prio: %08x", agent,
           _transport_to_string (transport), tmpbuf,
           addr? nice_address_get_port (addr) : 0, stream_id, component_id,
           username, password, priority);
@@ -3526,11 +3740,22 @@ static gboolean priv_add_remote_candidate (
        * a controlling agent MUST use the regular selection algorithm,
        * RFC 6544, sect 8, "Concluding ICE Processing"
        */
-      if (agent->nomination_mode == NICE_NOMINATION_MODE_AGGRESSIVE &&
+      if (agent->controlling_mode &&
+          agent->nomination_mode == NICE_NOMINATION_MODE_AGGRESSIVE &&
           transport != NICE_CANDIDATE_TRANSPORT_UDP) {
-        nice_debug ("Agent %p : we have TCP candidates, switching back "
-          "to regular nomination mode", agent);
-        agent->nomination_mode = NICE_NOMINATION_MODE_REGULAR;
+        if (conn_check_stun_transactions_count (agent) > 0) {
+          /* changing nomination mode from aggressive to regular while
+           * conncheck is ongoing may cause unexpected results (inflight
+           * aggressive stun requests may nominate a pair unilaterally)
+           */
+          nice_debug ("Agent %p : we have a TCP candidate, but conncheck "
+              "has started already in aggressive mode, ignore it", agent);
+          goto errors;
+        } else {
+          nice_debug ("Agent %p : we have a TCP candidate, switching back "
+              "to regular nomination mode", agent);
+          agent->nomination_mode = NICE_NOMINATION_MODE_REGULAR;
+        }
       }
     }
 
@@ -3552,6 +3777,9 @@ static gboolean priv_add_remote_candidate (
     if (conn_check_add_for_candidate (agent, stream_id,
         component, candidate) < 0)
       goto errors;
+
+    component->remote_candidates = g_slist_append (component->remote_candidates,
+        candidate);
   }
   return TRUE;
 
@@ -3571,6 +3799,8 @@ nice_agent_set_remote_credentials (
 
   g_return_val_if_fail (NICE_IS_AGENT (agent), FALSE);
   g_return_val_if_fail (stream_id >= 1, FALSE);
+
+  nice_debug ("Agent %p: set_remote_credentials %d", agent, stream_id);
 
   agent_lock (agent);
 
@@ -3841,6 +4071,9 @@ agent_recv_message_unlocked (
         new_socket = nice_tcp_passive_socket_accept (nicesock);
         if (new_socket) {
           _priv_set_socket_tos (agent, new_socket, stream->tos);
+          nice_debug ("Agent %p: add to tcp-pass socket %p a new "
+              "tcp accept socket %p in s/c %d/%d",
+              agent, nicesock, new_socket, stream->id, component->id);
           nice_component_attach_socket (component, new_socket);
         }
         sockret = 0;
@@ -3960,7 +4193,7 @@ agent_recv_message_unlocked (
     retval = sockret;
   }
 
-  g_assert (retval != RECV_OOB);
+  g_assert_cmpint (retval, !=, RECV_OOB);
   if (message->length == 0) {
     retval = RECV_OOB;
     nice_debug_verbose ("%s: Agent %p: message handled out-of-band", G_STRFUNC,
@@ -4390,7 +4623,7 @@ pending_io_messages_recv_messages (NiceComponent *component, gboolean reliable,
   IOCallbackData *data;
   NiceInputMessage *message = &messages[iter->message];
 
-  g_assert (component->io_callback_id == 0);
+  g_assert_cmpuint (component->io_callback_id, ==, 0);
 
   data = g_queue_peek_head (&component->pending_io_messages);
   if (data == NULL)
@@ -4943,7 +5176,7 @@ nice_agent_send_messages_nonblocking_internal (
         g_set_error (&child_error, G_IO_ERROR, G_IO_ERROR_FAILED,
             "Error writing data to socket.");
       } else if (n_sent > 0 && allow_partial) {
-        g_assert (n_messages == 1);
+        g_assert_cmpuint (n_messages, ==, 1);
         n_sent = output_message_get_size (messages);
       }
     }
@@ -4964,7 +5197,7 @@ nice_agent_send_messages_nonblocking_internal (
 
 done:
   g_assert ((child_error != NULL) == (n_sent == -1));
-  g_assert (n_sent != 0);
+  g_assert_cmpint (n_sent, !=, 0);
   g_assert (n_sent < 0 ||
       (!allow_partial && (guint) n_sent <= n_messages) ||
       (allow_partial && n_messages == 1 &&
@@ -5178,6 +5411,16 @@ nice_agent_dispose (GObject *object)
     g_object_unref (s);
 
     agent->streams = g_slist_delete_link(agent->streams, agent->streams);
+  }
+
+  while (agent->pruning_streams) {
+    NiceStream *s = agent->pruning_streams->data;
+
+    nice_stream_close (agent, s);
+    g_object_unref (s);
+
+    agent->pruning_streams = g_slist_delete_link(agent->pruning_streams,
+        agent->pruning_streams);
   }
 
   while ((sig = g_queue_pop_head (&agent->pending_signals))) {
@@ -5397,8 +5640,8 @@ component_io_cb (GSocket *gsocket, GIOCondition condition, gpointer user_data)
     RecvStatus retval;
 
     /* Don’t want to trample over partially-valid buffers. */
-    g_assert (component->recv_messages_iter.buffer == 0);
-    g_assert (component->recv_messages_iter.offset == 0);
+    g_assert_cmpuint (component->recv_messages_iter.buffer, ==, 0);
+    g_assert_cmpint (component->recv_messages_iter.offset, ==, 0);
 
     while (!nice_input_message_iter_is_at_end (&component->recv_messages_iter,
         component->recv_messages, component->n_recv_messages)) {
@@ -6693,4 +6936,19 @@ nice_agent_close_async (NiceAgent *agent, GAsyncReadyCallback callback,
   refresh_prune_agent_async (agent, on_agent_refreshes_pruned, task);
 
   agent_unlock (agent);
+}
+
+
+NICEAPI_EXPORT GPtrArray *
+nice_agent_get_sockets (NiceAgent *agent, guint stream_id, guint component_id)
+{
+  GPtrArray *array = NULL;
+  NiceComponent *component;
+
+  agent_lock (agent);
+  if (agent_find_component (agent, stream_id, component_id, NULL, &component))
+    array = nice_component_get_sockets (component);
+  agent_unlock (agent);
+
+  return array;
 }

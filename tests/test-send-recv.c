@@ -428,7 +428,7 @@ validate_received_buffer (TestIOStreamThreadData *data, gsize buffer_offset,
   memset (expected_buf, 0xaa, buf_len);
   generate_buffer_data (test_data->buffer_data_strategy, buffer_offset,
       expected_buf, len);
-  g_assert (memcmp (*buf, expected_buf, len) == 0);
+  g_assert_cmpmem (*buf, len, expected_buf, len);
   g_free (expected_buf);
 
   test_data->received_bytes += len;
@@ -481,8 +481,7 @@ validate_received_messages (TestIOStreamThreadData *data, gsize buffer_offset,
         memset (expected_buf, 0xaa, buffer->size);
         generate_buffer_data (test_data->buffer_data_strategy, buffer_offset,
             expected_buf, valid_len);
-        g_assert_cmpint (memcmp (buffer->buffer, expected_buf, valid_len), ==,
-            0);
+        g_assert_cmpmem (buffer->buffer, valid_len, expected_buf, valid_len);
         g_free (expected_buf);
         buffer_offset += valid_len;
         message_len_remaining -= valid_len;
@@ -1000,34 +999,36 @@ write_stream_cb (GObject *pollable_stream, gpointer _user_data)
   guint8 *buf = NULL;
   gsize buf_len = 0;
   gssize len;
+  for (;;) {
 
-  /* Initialise a receive buffer. */
-  generate_buffer_to_transmit (data, test_data->transmitted_bytes, &buf,
-      &buf_len);
+    /* Initialise a receive buffer. */
+    generate_buffer_to_transmit (data, test_data->transmitted_bytes, &buf,
+        &buf_len);
 
-  /* Try to transmit some data. */
-  len = g_pollable_output_stream_write_nonblocking (
-      G_POLLABLE_OUTPUT_STREAM (pollable_stream), buf, buf_len, NULL, &error);
+    /* Try to transmit some data. */
+    len = g_pollable_output_stream_write_nonblocking (
+        G_POLLABLE_OUTPUT_STREAM (pollable_stream), buf, buf_len, NULL, &error);
 
-  if (len == -1) {
-    g_assert_error (error, G_IO_ERROR, G_IO_ERROR_WOULD_BLOCK);
-    g_free (buf);
-    return G_SOURCE_CONTINUE;
+    if (len == -1) {
+      g_assert_error (error, G_IO_ERROR, G_IO_ERROR_WOULD_BLOCK);
+      g_free (buf);
+      return G_SOURCE_CONTINUE;
+    }
+
+    g_assert_no_error (error);
+
+    /* Update the test’s buffer generation state machine. */
+    notify_transmitted_buffer (data, test_data->transmitted_bytes, &buf, buf_len,
+        len);
+
+    /* Termination time? */
+    if (test_data->transmitted_bytes == test_data->n_bytes) {
+      g_main_loop_quit (gsource_data->main_loop);
+      break;
+    }
   }
 
-  g_assert_no_error (error);
-
-  /* Update the test’s buffer generation state machine. */
-  notify_transmitted_buffer (data, test_data->transmitted_bytes, &buf, buf_len,
-      len);
-
-  /* Termination time? */
-  if (test_data->transmitted_bytes == test_data->n_bytes) {
-    g_main_loop_quit (gsource_data->main_loop);
-    return G_SOURCE_REMOVE;
-  }
-
-  return G_SOURCE_CONTINUE;
+  return G_SOURCE_REMOVE;
 }
 
 static void
@@ -1156,7 +1157,7 @@ guint32 option_transmit_seed = 0;
 guint32 option_receive_seed = 0;
 gsize option_n_bytes = 10000;
 guint option_n_messages = 50;
-guint option_timeout = 15;  /* seconds */
+guint option_timeout = 150;  /* seconds */
 gboolean option_long_mode = FALSE;
 
 static GOptionEntry entries[] = {

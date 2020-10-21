@@ -52,10 +52,10 @@ test_ipv4 (void)
   nice_address_init (&addr);
   nice_address_init (&other);
   nice_address_set_ipv4 (&addr, 0x01020304);
-  g_assert (addr.s.ip4.sin_family == AF_INET);
+  g_assert_cmpint (addr.s.ip4.sin_family, ==, AF_INET);
 
   nice_address_to_string (&addr, str);
-  g_assert (0 == strcmp (str, "1.2.3.4"));
+  g_assert_cmpstr (str, ==, "1.2.3.4");
 
   nice_address_to_string (&addr, str);
 
@@ -84,9 +84,71 @@ test_ipv4 (void)
   /* test private address check */
   {
     NiceAddress *heap_addr = nice_address_new ();
+
+    g_assert (nice_address_set_from_string (heap_addr, "127.0.0.1.1") != TRUE);
+
     g_assert (nice_address_set_from_string (heap_addr, "127.0.0.1") == TRUE);
     g_assert (nice_address_is_private (heap_addr) == TRUE);
-    g_assert (nice_address_set_from_string (heap_addr, "127.0.0.1.1") != TRUE);
+
+    g_assert (nice_address_set_from_string (heap_addr, "127.1.1.1") == TRUE);
+    g_assert (nice_address_is_private (heap_addr) == TRUE);
+
+    g_assert (nice_address_set_from_string(heap_addr, "192.168.2.0"));
+    g_assert (nice_address_is_private (heap_addr) == TRUE);
+
+    g_assert (nice_address_set_from_string(heap_addr, "192.168.15.69"));
+    g_assert (nice_address_is_private (heap_addr) == TRUE);
+
+    g_assert (nice_address_set_from_string(heap_addr, "192.169.0.0"));
+    g_assert (nice_address_is_private (heap_addr) == FALSE);
+
+    g_assert (nice_address_set_from_string(heap_addr, "192.167.0.0"));
+    g_assert (nice_address_is_private (heap_addr) == FALSE);
+
+    g_assert (nice_address_set_from_string(heap_addr, "10.2.1.2"));
+    g_assert (nice_address_is_private (heap_addr) == TRUE);
+
+    g_assert (nice_address_set_from_string(heap_addr, "11.0.0.0"));
+    g_assert (nice_address_is_private (heap_addr) == FALSE);
+
+    g_assert (nice_address_set_from_string(heap_addr, "9.255.255.255"));
+    g_assert (nice_address_is_private (heap_addr) == FALSE);
+
+    g_assert (nice_address_set_from_string(heap_addr, "172.15.255.255"));
+    g_assert (nice_address_is_private (heap_addr) == FALSE);
+
+    g_assert (nice_address_set_from_string(heap_addr, "172.16.0.0"));
+    g_assert (nice_address_is_private (heap_addr) == TRUE);
+
+    g_assert (nice_address_set_from_string(heap_addr, "172.31.255.255"));
+    g_assert (nice_address_is_private (heap_addr) == TRUE);
+
+    g_assert (nice_address_set_from_string(heap_addr, "172.32.0.0"));
+    g_assert (nice_address_is_private (heap_addr) == FALSE);
+    g_assert (nice_address_set_from_string(heap_addr, "172.63.0.0"));
+    g_assert (nice_address_is_private (heap_addr) == FALSE);
+
+    g_assert (nice_address_set_from_string(heap_addr, "169.253.255.255"));
+    g_assert (nice_address_is_private (heap_addr) == FALSE);
+
+    g_assert (nice_address_set_from_string(heap_addr, "169.254.0.0"));
+    g_assert (nice_address_is_private (heap_addr) == TRUE);
+
+    g_assert (nice_address_set_from_string(heap_addr, "169.254.255.255"));
+    g_assert (nice_address_is_private (heap_addr) == TRUE);
+
+    g_assert (nice_address_set_from_string(heap_addr, "169.255.0.0"));
+    g_assert (nice_address_is_private (heap_addr) == FALSE);
+
+    g_assert (nice_address_set_from_string(heap_addr, "fe70::0"));
+    g_assert (nice_address_is_private (heap_addr) == FALSE);
+    
+    g_assert (nice_address_set_from_string(heap_addr, "fe80::0"));
+    g_assert (nice_address_is_private (heap_addr) == TRUE);
+
+    g_assert (nice_address_set_from_string(heap_addr, "fe81::0"));
+    g_assert (nice_address_is_private (heap_addr) == TRUE);
+
     nice_address_free (heap_addr);
   }
 }
@@ -115,10 +177,10 @@ test_ipv6 (void)
       "\x44\x55\x66\x77"
       "\x88\x99\xaa\xbb"
       "\xcc\xdd\xee\xff");
-  g_assert (addr.s.ip6.sin6_family == AF_INET6);
+  g_assert_cmpint (addr.s.ip6.sin6_family, ==, AF_INET6);
 
   nice_address_to_string (&addr, str);
-  g_assert (0 == strcmp (str, "11:2233:4455:6677:8899:aabb:ccdd:eeff"));
+  g_assert_cmpstr (str, ==, "11:2233:4455:6677:8899:aabb:ccdd:eeff");
 
   nice_address_set_port (&addr, 9876); /* in native byte order */
   nice_address_set_from_string (&other, "11:2233:4455:6677:8899:aabb:ccdd:eeff");
@@ -130,7 +192,7 @@ test_ipv6 (void)
   nice_address_to_string (&addr, str);
   nice_address_to_string (&other, str);
 
-  g_assert (memcmp (&sin, &sin2, sizeof(sin)) == 0);
+  g_assert_cmpmem (&sin,  sizeof(sin), &sin2, sizeof(sin2));
 
   /* private IPv6 address */
   nice_address_set_ipv6 (&addr, (guchar *)
