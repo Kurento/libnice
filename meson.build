@@ -1,5 +1,5 @@
 project('libnice', 'c',
-  version: '0.1.17',
+  version: '0.1.18',
   meson_version : '>= 0.52',
   default_options : ['warning_level=1', 'buildtype=debugoptimized'])
 
@@ -20,7 +20,7 @@ endif
 # B is the ABI age, change it on new APIs that don't break existing ones, changing it resets C to 0
 # C is the revision, change on new updates that don't change APIs
 soversion = 10
-libversion = '10.10.0'
+libversion = '10.11.0'
 
 glib_req = '>= 2.54'
 gnutls_req = '>= 2.12.0'
@@ -189,7 +189,7 @@ gthread_dep = dependency('gthread-2.0',
 
 # Cryto library
 opt_cryptolib = get_option('crypto-library')
-message('Crypto librar requested: ' + opt_cryptolib)
+message('Crypto library requested: ' + opt_cryptolib)
 if opt_cryptolib != 'openssl'
   crypto_dep = dependency('gnutls', version: gnutls_req, required: false)
   cdata.set('HAVE_GNUTLS', crypto_dep.found())
@@ -243,7 +243,7 @@ endif
 if not crypto_dep.found()
   if opt_cryptolib == 'gnutls'
     error('GnuTLS requested as crypto library, but not found')
-  elif opt_cryptolib == 'gnutls'
+  elif opt_cryptolib == 'openssl'
     error('OpenSSL requested as crypto library, but not found')
   else
     error('Either GnuTLS or OpenSSL is required as crypto library, but neither was found')
