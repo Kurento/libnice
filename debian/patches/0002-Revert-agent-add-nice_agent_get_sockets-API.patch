@@ -1,0 +1,206 @@
+From: Juan Navarro <juan.navarro@gmx.es>
+Date: Wed, 21 Oct 2020 13:08:43 +0200
+Subject: Revert "agent: add nice_agent_get_sockets API"
+
+This reverts commit 875a23a72257f38a3286315e9752fe93e5ab9591.
+
+The reason for reverting this commit is that it bumps the GLib
+version requirement from 2.48 (as provided by Ubuntu 16.04) to
+2.54 (Ubuntu 18.04). This means that it is not possible any more
+to build libnice on Ubuntu 16.04.
+
+This commit also introduces some new API calls that are NOT used
+by Kurento, so we won't really notice not having them:
+nice_agent_get_sockets
+nice_component_get_sockets
+---
+ README                                      |  2 +-
+ agent/agent.c                               | 15 ---------------
+ agent/agent.h                               | 23 -----------------------
+ agent/component.c                           | 19 -------------------
+ agent/component.h                           |  2 --
+ configure.ac                                |  4 ++--
+ docs/reference/libnice/libnice-docs.xml     |  4 ----
+ docs/reference/libnice/libnice-sections.txt |  1 -
+ meson.build                                 |  2 +-
+ nice/libnice.sym                            |  1 -
+ 10 files changed, 4 insertions(+), 69 deletions(-)
+
+diff --git a/README b/README
+index b42d730..5ab8660 100644
+--- a/README
++++ b/README
+@@ -16,7 +16,7 @@ See the file COPYING.
+ Requirements
+ ------------
+ 
+- glib >= 2.54
++ glib >= 2.44
+  pkg-config
+  gnutls >= 2.12.0 or OpenSSL
+  gupnp-igd >= 0.1.2 (optional)
+diff --git a/agent/agent.c b/agent/agent.c
+index 7bbf74a..7b25670 100644
+--- a/agent/agent.c
++++ b/agent/agent.c
+@@ -6937,18 +6937,3 @@ nice_agent_close_async (NiceAgent *agent, GAsyncReadyCallback callback,
+ 
+   agent_unlock (agent);
+ }
+-
+-
+-NICEAPI_EXPORT GPtrArray *
+-nice_agent_get_sockets (NiceAgent *agent, guint stream_id, guint component_id)
+-{
+-  GPtrArray *array = NULL;
+-  NiceComponent *component;
+-
+-  agent_lock (agent);
+-  if (agent_find_component (agent, stream_id, component_id, NULL, &component))
+-    array = nice_component_get_sockets (component);
+-  agent_unlock (agent);
+-
+-  return array;
+-}
+diff --git a/agent/agent.h b/agent/agent.h
+index 1164138..c3b77a3 100644
+--- a/agent/agent.h
++++ b/agent/agent.h
+@@ -1681,29 +1681,6 @@ void
+ nice_agent_close_async (NiceAgent *agent, GAsyncReadyCallback callback,
+     gpointer callback_data);
+ 
+-/**
+- * nice_agent_get_sockets:
+- * @agent: The #NiceAgent Object
+- * @stream_id: The ID of the stream
+- * @component_id: The ID of the component
+- *
+- * Each component can have multiple sockets, this is an API to retrieve them all
+- * to be able to set properties. Most of the sockets for a component are created when
+- * calling nice_agent_gather_candidates(), so this API should be called right after to
+- * able to set properties on the sockets before they are used.
+- *
+- * These sockets can be a mix of UDP & TCP sockets depending on the compatibility mode
+- * and options that have been set.
+- *
+- * Returns: (element-type GSocket) (transfer full): An array
+- * containing all of the sockets for this component. Free with
+- * g_ptr_array_unref() when done.
+- *
+- * Since: 0.1.17
+- */
+-GPtrArray *
+-nice_agent_get_sockets (NiceAgent *agent, guint stream_id, guint component_id);
+-
+ G_END_DECLS
+ 
+ #endif /* __LIBNICE_AGENT_H__ */
+diff --git a/agent/component.c b/agent/component.c
+index 27d6218..f0794bf 100644
+--- a/agent/component.c
++++ b/agent/component.c
+@@ -1621,22 +1621,3 @@ nice_component_verify_remote_candidate (NiceComponent *component,
+ 
+   return FALSE;
+ }
+-
+-/* Must be called with agent lock held */
+-/* Returns a transfer full GPtrArray of GSocket */
+-GPtrArray *
+-nice_component_get_sockets (NiceComponent *component)
+-{
+-  GPtrArray *array = g_ptr_array_new_with_free_func ((GDestroyNotify) g_object_unref);
+-  GSList *item;
+-
+-  for (item = component->local_candidates; item; item = item->next) {
+-    NiceCandidate *cand = item->data;
+-    NiceSocket *nicesock = cand->sockptr;
+-
+-    if (nicesock->fileno && !g_ptr_array_find (array, nicesock->fileno, NULL))
+-      g_ptr_array_add (array, g_object_ref (nicesock->fileno));
+-  }
+-
+-  return array;
+-}
+diff --git a/agent/component.h b/agent/component.h
+index b35eb11..a3777f6 100644
+--- a/agent/component.h
++++ b/agent/component.h
+@@ -310,8 +310,6 @@ gboolean
+ nice_component_verify_remote_candidate (NiceComponent *component,
+     const NiceAddress *address, NiceSocket *nicesock);
+ 
+-GPtrArray *
+-nice_component_get_sockets (NiceComponent *component);
+ 
+ G_END_DECLS
+ 
+diff --git a/configure.ac b/configure.ac
+index 0ac44a0..cd2c201 100644
+--- a/configure.ac
++++ b/configure.ac
+@@ -95,9 +95,9 @@ AC_CHECK_HEADERS([ifaddrs.h],
+ AC_CHECK_TYPES([size_t, ssize_t])
+ 
+ # Also put matching version in LIBNICE_CFLAGS
+-GLIB_REQ=2.54
++GLIB_REQ=2.48
+ 
+-LIBNICE_CFLAGS="-DGLIB_VERSION_MIN_REQUIRED=GLIB_VERSION_2_54 -DGLIB_VERSION_MAX_ALLOWED=GLIB_VERSION_2_54"
++LIBNICE_CFLAGS="-DGLIB_VERSION_MIN_REQUIRED=GLIB_VERSION_2_44 -DGLIB_VERSION_MAX_ALLOWED=GLIB_VERSION_2_44"
+ 
+ dnl Support different levels of compiler error reporting.
+ dnl This configure flag is designed to mimic one from gnome-common,
+diff --git a/docs/reference/libnice/libnice-docs.xml b/docs/reference/libnice/libnice-docs.xml
+index e3e0966..5bb5f08 100644
+--- a/docs/reference/libnice/libnice-docs.xml
++++ b/docs/reference/libnice/libnice-docs.xml
+@@ -113,10 +113,6 @@
+       <title>Index of new symbols in 0.1.16</title>
+       <xi:include href="xml/api-index-0.1.16.xml"><xi:fallback/></xi:include>
+     </index>
+-    <index role="0.1.17">
+-      <title>Index of new symbols in 0.1.17</title>
+-      <xi:include href="xml/api-index-0.1.17.xml"><xi:fallback/></xi:include>
+-    </index>
+     <xi:include href="xml/annotation-glossary.xml"><xi:fallback /></xi:include>
+   </part>
+ </book>
+diff --git a/docs/reference/libnice/libnice-sections.txt b/docs/reference/libnice/libnice-sections.txt
+index 0e73585..c78e121 100644
+--- a/docs/reference/libnice/libnice-sections.txt
++++ b/docs/reference/libnice/libnice-sections.txt
+@@ -54,7 +54,6 @@ nice_agent_parse_remote_stream_sdp
+ nice_agent_parse_remote_candidate_sdp
+ nice_agent_get_io_stream
+ nice_agent_get_selected_socket
+-nice_agent_get_sockets
+ nice_agent_get_component_state
+ nice_agent_close_async
+ nice_component_state_to_string
+diff --git a/meson.build b/meson.build
+index 0004d91..1822c76 100644
+--- a/meson.build
++++ b/meson.build
+@@ -22,7 +22,7 @@ endif
+ soversion = 10
+ libversion = '10.10.0'
+ 
+-glib_req = '>= 2.54'
++glib_req = '>= 2.48'
+ gnutls_req = '>= 2.12.0'
+ gupnp_igd_req = '>= 0.2.4'
+ gst_req = '>= 1.0.0'
+diff --git a/nice/libnice.sym b/nice/libnice.sym
+index 007be55..1e6d127 100644
+--- a/nice/libnice.sym
++++ b/nice/libnice.sym
+@@ -36,7 +36,6 @@ nice_agent_get_local_credentials
+ nice_agent_get_remote_candidates
+ nice_agent_get_selected_pair
+ nice_agent_get_selected_socket
+-nice_agent_get_sockets
+ nice_agent_get_stream_name
+ nice_agent_get_type
+ nice_agent_new
