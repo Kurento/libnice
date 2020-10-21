@@ -18,7 +18,6 @@ override_dh_auto_configure:
 	                     --with-gstreamer \
 	                     --enable-introspection \
 	                     \
-	                     --with-ignored-network-interface-prefix=docker \
 	                     --with-gstreamer-1.5
 
 override_dh_install:
