@@ -75,7 +75,8 @@ read_thread_cb (GInputStream *input_stream, TestIOStreamThreadData *data)
     g_assert_cmpint (len, ==, sizeof (buf));
 
     memset (expected_data, user_data->recv_count + '1', sizeof (expected_data));
-    g_assert (memcmp (buf, expected_data, sizeof (expected_data)) == 0);
+    g_assert_cmpmem (buf, sizeof (expected_data), expected_data,
+        sizeof (expected_data));
   }
 
   check_for_termination (data, &user_data->recv_count,
@@ -145,8 +146,8 @@ int main (void)
   run_io_stream_test (30, TRUE, &callbacks, l_data, NULL, r_data, NULL);
 
   /* Verify that correct number of local candidates were reported. */
-  g_assert (l_data->cand_count == 1);
-  g_assert (r_data->cand_count == 1);
+  g_assert_cmpuint (l_data->cand_count, ==, 1);
+  g_assert_cmpuint (r_data->cand_count, ==, 1);
 
   g_free (r_data);
   g_free (l_data);

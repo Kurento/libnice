@@ -81,6 +81,23 @@ G_BEGIN_DECLS
  */
 #define NICE_CANDIDATE_MAX_FOUNDATION                (32+1)
 
+/**
+ * NICE_CANDIDATE_MAX_TURN_SERVERS
+ *
+ * The maximum number of turns servers.
+ */
+#define NICE_CANDIDATE_MAX_TURN_SERVERS              8
+
+/**
+ * NICE_CANDIDATE_MAX_LOCAL_ADDRESSES
+ *
+ * The maximum number of local addresses. The constraint is that the
+ * maximum number of local addresses and number of turn servers must
+ * fit on 9 bits, to ensure candidate priority uniqueness. See also
+ * @NICE_CANDIDATE_MAX_TURN_SERVERS. We choose 6 bits for the number of
+ * local addresses, and 3 bits for the number of turn servers.
+ */
+#define NICE_CANDIDATE_MAX_LOCAL_ADDRESSES           64
 
 /**
  * NiceCandidateType:
@@ -141,7 +158,12 @@ typedef struct _TurnServer TurnServer;
  * @server: The #NiceAddress of the TURN server
  * @username: The TURN username
  * @password: The TURN password
+ * @decoded_username: The base64 decoded TURN username
+ * @decoded_password: The base64 decoded TURN password
+ * @decoded_username_len: The length of @decoded_username
+ * @decoded_password_len: The length of @decoded_password
  * @type: The #NiceRelayType of the server
+ * @preference: A unique identifier used to compute priority
  *
  * A structure to store the TURN relay settings
  */
@@ -152,7 +174,12 @@ struct _TurnServer
   NiceAddress server;
   gchar *username;
   gchar *password;
+  guint8 *decoded_username;
+  guint8 *decoded_password;
+  gsize decoded_username_len;
+  gsize decoded_password_len;
   NiceRelayType type;
+  guint preference;
 };
 
 /**
@@ -172,6 +199,7 @@ struct _TurnServer
  * @turn: The #TurnServer settings if the candidate is
  * of type %NICE_CANDIDATE_TYPE_RELAYED
  * @sockptr: The underlying socket
+ * @keepalive_next_tick: The timestamp for the next keepalive
  *
  * A structure to represent an ICE candidate
  <note>
@@ -197,6 +225,7 @@ struct _NiceCandidate
   gchar *password;        /* pointer to a nul-terminated password string */
   TurnServer *turn;
   gpointer sockptr;
+  guint64 keepalive_next_tick; /* next tick timestamp */
 };
 
 /**

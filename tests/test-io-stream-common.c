@@ -70,6 +70,7 @@ static gboolean timer_cb (gpointer pointer)
 
   /* note: should not be reached, abort */
   g_debug ("ERROR: test has got stuck, aborting...");
+  abort();
   exit (-1);
 }
 
@@ -303,7 +304,7 @@ add_stream (NiceAgent *agent)
   guint stream_id;
 
   stream_id = nice_agent_add_stream (agent, 2);
-  g_assert (stream_id > 0);
+  g_assert_cmpuint (stream_id, >, 0);
 
   g_object_set_data (G_OBJECT (agent), "stream-id",
       GUINT_TO_POINTER (stream_id));
@@ -350,7 +351,7 @@ run_io_stream_test (guint deadlock_timeout, gboolean reliable,
   GMainLoop *error_loop;
   GThread *l_main_thread, *r_main_thread;
   GThread *l_write_thread, *l_read_thread, *r_write_thread, *r_read_thread;
-  TestIOStreamThreadData l_data, r_data;
+  TestIOStreamThreadData l_data = { NULL }, r_data = { NULL };
   GMutex mutex;
   GCond cond;
   guint start_count = 6;
@@ -504,6 +505,7 @@ check_for_termination (TestIOStreamThreadData *data, gsize *recv_count,
 {
   guint stream_id;
   gpointer tmp;
+  GError *error = NULL;
 
   /* Wait for transmission to complete. */
   while (*send_count < expected_recv_count) {
@@ -519,33 +521,28 @@ check_for_termination (TestIOStreamThreadData *data, gsize *recv_count,
   /* Can't be certain enough to test for termination on non-reliable streams.
    * There may be packet losses, etc
    */
-  if (data->reliable) {
-    guint8 buf[65536];
-    gsize buf_len;
+  if (data->io_stream) {
     gssize len;
-    GError *error = NULL;
 
-    g_assert_cmpuint (*recv_count, >=, expected_recv_count);
+    g_output_stream_close (g_io_stream_get_output_stream (data->io_stream),
+            NULL, &error);
 
-    buf_len = strlen ("Done");
-    memcpy (buf, "Done", buf_len);
-    len = nice_agent_send (data->agent, stream_id, 1, buf_len, (gchar *) buf);
-    g_assert_cmpint (len, ==, buf_len);
-
-    /* Wait for a done packet. */
-    len = nice_agent_recv (data->agent, stream_id, 1, buf, buf_len, NULL,
-        &error);
     g_assert_no_error (error);
 
-    g_assert_cmpint (len, ==, strlen ("Done"));
-    g_assert_cmpint (memcmp (buf, "Done", strlen ("Done")), ==, 0);
-
-    *recv_count = *recv_count + 1;
+    len = g_input_stream_skip (g_io_stream_get_input_stream (data->io_stream),
+        1024 * 1024, NULL, &error);
+    g_assert_no_error (error);
+    g_assert_cmpint (len, ==, 0);
   }
 
   /* Remove the stream and run away. */
   nice_agent_remove_stream (data->agent, stream_id);
   g_object_set_data (G_OBJECT (data->agent), "stream-id", GUINT_TO_POINTER (0));
+  g_clear_object (&data->io_stream);
+
+  data->done = TRUE;
+  if (data->other->done)
+    g_main_loop_quit (data->error_loop);
 
   /* If both sides have finished, quit the test main loop. */
   if (*recv_count > expected_recv_count &&

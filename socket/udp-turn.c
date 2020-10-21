@@ -666,10 +666,10 @@ _socket_send_messages_wrapped (NiceSocket *sock, const NiceAddress *to,
     guint i;
     gint ret;
 
-    g_assert (n_messages == 1);
+    g_assert_cmpuint (n_messages, ==, 1);
     message = &messages[0];
     message_len = output_message_get_size (message);
-    g_assert (message_len <= G_MAXUINT16);
+    g_assert_cmpint (message_len, <=, G_MAXUINT16);
 
     /* ICE-TCP requires that all packets be framed with RFC4571 */
 
@@ -889,16 +889,22 @@ socket_send_message (NiceSocket *sock, const NiceAddress *to,
       if (priv->compatibility == NICE_TURN_SOCKET_COMPATIBILITY_GOOGLE &&
           priv->current_binding &&
           nice_address_equal (&priv->current_binding->peer, to)) {
-        stun_message_append32 (&msg, STUN_ATTRIBUTE_OPTIONS, 1);
+        if (stun_message_append32 (&msg, STUN_ATTRIBUTE_OPTIONS, 1) !=
+            STUN_MESSAGE_RETURN_SUCCESS)
+          goto error;
       }
     }
 
     if (priv->compatibility == NICE_TURN_SOCKET_COMPATIBILITY_OC2007) {
-      stun_message_append32(&msg, STUN_ATTRIBUTE_MS_VERSION, 1);
+      if(stun_message_append32(&msg, STUN_ATTRIBUTE_MS_VERSION, 1) !=
+            STUN_MESSAGE_RETURN_SUCCESS)
+          goto error;
 
       if (priv->ms_connection_id_valid)
-        stun_message_append_ms_connection_id(&msg, priv->ms_connection_id,
-            ++priv->ms_sequence_num);
+        if (stun_message_append_ms_connection_id(&msg, priv->ms_connection_id,
+            ++priv->ms_sequence_num) !=
+            STUN_MESSAGE_RETURN_SUCCESS)
+          goto error;
 
       stun_message_ensure_ms_realm(&msg, priv->ms_realm);
     }
@@ -1195,10 +1201,12 @@ priv_binding_timeout (gpointer data)
   }
 
   nice_debug ("Permission is about to timeout, sending binding renewal");
+  source = g_main_current_source ();
 
   /* find current binding and mark it for renewal */
   for (i = priv->channels ; i; i = i->next) {
     ChannelBinding *b = i->data;
+
     if (b->timeout_source == source) {
       b->renew = TRUE;
 
@@ -1231,7 +1239,7 @@ nice_udp_turn_socket_cache_realm_nonce_locked (NiceSocket *sock,
   UdpTurnPriv *priv = sock->priv;
   gconstpointer tmp;
 
-  g_assert (sock->type == NICE_SOCKET_TYPE_UDP_TURN);
+  g_assert_cmpint (sock->type, ==, NICE_SOCKET_TYPE_UDP_TURN);
 
   g_free (priv->cached_realm);
   priv->cached_realm = NULL;

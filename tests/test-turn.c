@@ -121,7 +121,7 @@ static void set_candidates (NiceAgent *from, guint from_stream,
     for (i = cands; i; i = i->next) {
       NiceCandidate *cand = i->data;
       if (force_relay)
-        g_assert (cand->type == NICE_CANDIDATE_TYPE_RELAYED);
+        g_assert_cmpint (cand->type, ==, NICE_CANDIDATE_TYPE_RELAYED);
       if (cand->type != NICE_CANDIDATE_TYPE_RELAYED) {
         cands = g_slist_remove (cands, cand);
         nice_candidate_free (cand);
@@ -215,12 +215,16 @@ run_test(guint turn_port, gboolean is_ipv6,
 
   ls_id = nice_agent_add_stream (lagent, 1);
   rs_id = nice_agent_add_stream (ragent, 1);
-  g_assert (ls_id > 0);
-  g_assert (rs_id > 0);
+  g_assert_cmpuint (ls_id, >, 0);
+  g_assert_cmpuint (rs_id, >, 0);
   nice_agent_set_relay_info(lagent, ls_id, 1,
       localhost, turn_port, TURN_USER, TURN_PASS, turn_type);
   nice_agent_set_relay_info(ragent, rs_id, 1,
       localhost, turn_port, TURN_USER, TURN_PASS, turn_type);
+
+  g_assert (global_lagent_gathering_done == FALSE);
+  g_assert (global_ragent_gathering_done == FALSE);
+  g_debug ("test-turn: Added streams, running context until 'candidate-gathering-done'...");
 
   /* Gather candidates and test nice_agent_set_port_range */
   g_assert (nice_agent_gather_candidates (lagent, ls_id) == TRUE);
@@ -231,9 +235,6 @@ run_test(guint turn_port, gboolean is_ipv6,
   nice_agent_attach_recv (ragent, rs_id, NICE_COMPONENT_TYPE_RTP,
       g_main_context_default (), cb_nice_recv, GUINT_TO_POINTER (2));
 
-  g_assert (global_lagent_gathering_done == FALSE);
-  g_assert (global_ragent_gathering_done == FALSE);
-  g_debug ("test-turn: Added streams, running context until 'candidate-gathering-done'...");
   while (!global_lagent_gathering_done)
     g_main_context_iteration (NULL, TRUE);
   g_assert (global_lagent_gathering_done == TRUE);
@@ -251,8 +252,8 @@ run_test(guint turn_port, gboolean is_ipv6,
   while (global_lagent_state[0] != NICE_COMPONENT_STATE_READY ||
       global_ragent_state[0] != NICE_COMPONENT_STATE_READY)
     g_main_context_iteration (NULL, TRUE);
-  g_assert (global_lagent_state[0] == NICE_COMPONENT_STATE_READY);
-  g_assert (global_ragent_state[0] == NICE_COMPONENT_STATE_READY);
+  g_assert_cmpint (global_lagent_state[0], ==, NICE_COMPONENT_STATE_READY);
+  g_assert_cmpint (global_ragent_state[0], ==, NICE_COMPONENT_STATE_READY);
 
   nice_agent_remove_stream (lagent, ls_id);
   nice_agent_remove_stream (ragent, rs_id);

@@ -27,6 +27,7 @@ nice_tests = [
   'test-turn',
   'test-drop-invalid',
   'test-nomination',
+  'test-interfaces',
 ]
 
 if cc.has_header('arpa/inet.h')
@@ -54,6 +55,18 @@ foreach tname : nice_tests
     install: false)
   set_variable(tname.underscorify(), exe)
   test(tname, exe, env: tenv)
+
+  if tname == 'test-fullmode'
+    wrapper_exe = executable ('nice-test-fullmode-with-stun',
+			      'test-fullmode-with-stun.c',
+			      dependencies: gio_deps,
+			      install: false)
+    test('test-fullmode-with-stun', wrapper_exe,
+	 args: [stund_exe, test_fullmode],
+	 env: tenv,
+	 is_parallel: false,
+	 depends: exe)
+  endif
 endforeach
 
 if gst_dep.found()
@@ -73,19 +86,10 @@ if gst_dep.found()
   endif
 endif
 
-if find_program('sh', required : false).found()
-  dd = find_program('dd', required : false)
-  diff = find_program('diff', required : false)
-  if dd.found() and diff.found()
-    test('test-pseudotcp-random', find_program('test-pseudotcp-random.sh'),
-      args: test_pseudotcp,
-      env: tenv)
-  endif
-
-  test('test-fullmode-with-stun', files('check-test-fullmode-with-stun.sh'),
-    args: [stund_exe, test_fullmode],
-    env: tenv,
-    is_parallel: false)
+if find_program('sh', required : false).found() and find_program('dd', required : false).found() and find_program('diff', required : false).found()
+  test('test-pseudotcp-random', find_program('test-pseudotcp-random.sh'),
+       args: test_pseudotcp,
+       env: tenv)
 endif
 
 debugenv = environment()

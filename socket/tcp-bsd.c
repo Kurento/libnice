@@ -436,7 +436,7 @@ socket_send_more (
   gpointer data)
 {
   NiceSocket *sock = (NiceSocket *) data;
-  TcpPriv *priv = sock->priv;
+  TcpPriv *priv;
 
   g_mutex_lock (&mutex);
 
@@ -446,6 +446,8 @@ socket_send_more (
     g_mutex_unlock (&mutex);
     return FALSE;
   }
+
+  priv = sock->priv;
 
   /* connection hangs up or queue was emptied */
   if (condition & G_IO_HUP ||
@@ -475,4 +477,12 @@ nice_tcp_bsd_socket_set_passive_parent (NiceSocket *sock, NiceSocket *passive_pa
   g_assert (priv->passive_parent == NULL);
 
   priv->passive_parent = passive_parent;
+}
+
+NiceSocket *
+nice_tcp_bsd_socket_get_passive_parent (NiceSocket *sock)
+{
+  TcpPriv *priv = sock->priv;
+
+  return priv->passive_parent;
 }
