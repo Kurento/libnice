@@ -3,16 +3,16 @@ Section: libs
 Priority: optional
 Maintainer: Kurento <info@kurento.org>
 Build-Depends: debhelper (>= 9),
-               dh-autoreconf,
                gobject-introspection (>= 1.30.0),
-               gtk-doc-tools,
                libgirepository1.0-dev (>= 1.30.0),
                libglib2.0-dev (>= 2.48),
                libgnutls28-dev (>= 2.12.0),
                libgstreamer1.0-dev,
                libgstreamer1.5-dev,
                libgupnp-igd-1.0-dev (>= 0.2.4),
-               pkg-create-dbgsym
+               ninja-build (>= 1.7),
+               pkg-create-dbgsym,
+               python3-pip
 Standards-Version: 3.9.6
 Homepage: https://www.kurento.org/
 Vcs-Git: https://github.com/Kurento/libnice.git

@@ -20,27 +20,25 @@ Debian package.
 
   UPGRADE: This won't be needed with debhelper 10 on Ubuntu 18.04 (Bionic).
 
-* dh_autoreconf: libnice expects that the script autogen.sh is run before trying
-  to build. The Debian maintainers keep committed all the files that get
-  generated. We don't keep those files, instead use "override_dh_autoreconf" to
-  generate them by dynamically calling autogen.sh upon package creation.
+* Meson: libnice 0.1.18 dropped Autotools, so there is a big difference in build
+  scripts between 0.1.17 and 0.1.18. Now there is no configure script to call;
+  instead, everything is orchestrated with Meson and executed by Ninja.
 
-  - To use dh_autoreconf, debhelper 9 requires adding the flag
-    "dh --with autoreconf" and depend on package "dh-autoreconf".
+  DEPENDENCIES:
 
-    UPGRADE: This won't be needed with debhelper 10 on Ubuntu 18.04 (Bionic).
+  - Meson >= 0.52 is required, but Ubuntu 16.04 has 0.40. This means a newer
+  version must be installed to build libnice; this is done with the Python
+  installer. Package "python3-pip" in "control".
 
-  - dh_autoreconf "NOCONFIGURE=1 ./autogen.sh": By default, libnice's autogen.sh
-    runs autoreconf *and* ./configure. But debhelper will run ./configure in the
-    next step, with dh_auto_configure. So using NOCONFIGURE=1 we can avoid
-    running ./configure too early.
+  - Ninja >= 1.7 is required by meson. Package "ninja-build" in "control".
 
-  - autogen.sh unconditionally runs `gtkdocize`, so the package "gtk-doc-tools"
-    must be installed.
+* override_dh_auto_configure:
 
-    UPGRADE: This won't be needed with libnice 0.1.18 which builds with Meson.
+  - Runs the Python installer to dynamically install a valid version of Meson.
+    Note that network access is frowned upon by the Debian policies, but right
+    now we don't have much better ways to have a recent enough Meson.
 
-* dh_auto_configure:
+    UPGRADE: This won't be needed with Meson 0.53 on Ubuntu 20.04 (Focal).
 
   - "G_DISABLE_ASSERT": Disable GLib assertions based on `g_assert()`:
     https://developer.gnome.org/glib/stable/glib-Testing.html
@@ -54,15 +52,15 @@ Debian package.
     whole server just because libnice happens to go into a bad state on one of
     those connections.
 
-  - "--with-ignored-network-interface-prefix": This flag was used in the past
-    to ignore the Docker network interface (docker0) during ICE candidate
-    gathering. It is not needed any more, but still worth documenting here.
+  - "gstreamer_1_5": Needed to generate GStreamer packages that can be used with
+    the Kurento fork of GStreamer.
+
+  - "ignored-network-interface-prefix": This flag was used in the past to ignore
+    the Docker network interface (docker0) during ICE candidate gathering. It is
+    not needed any more, but still worth documenting here.
 
     libnice 0.1.17 introduced a list of interface names that will be ignored by
     default: "docker", "veth", "virbr", "vnet".
-
-  - "--with-gstreamer-1.5": Needed to generate GStreamer packages that can be
-    used with the Kurento fork of GStreamer.
 
 
 

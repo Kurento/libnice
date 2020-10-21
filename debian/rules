@@ -5,20 +5,37 @@
 
 
 %:
-	dh $@ --with autoreconf,gir
+	dh $@ --with gir
 
-override_dh_autoreconf:
-	dh_autoreconf "NOCONFIGURE=1 ./autogen.sh"
+override_dh_auto_clean:
+	rm -rf debian/build
 
 override_dh_auto_configure:
-	CFLAGS="${CFLAGS} -DG_DISABLE_ASSERT" \
-	dh_auto_configure -- --libdir=\$${prefix}/lib/$(DEB_HOST_MULTIARCH) \
-	                     --enable-compile-warnings=yes \
-	                     --enable-gupnp \
-	                     --with-gstreamer \
-	                     --enable-introspection \
-	                     \
-	                     --with-gstreamer-1.5
+	pip3 --no-cache-dir install 'meson >= 0.52, < 0.57' \
+	&& PATH="/usr/local/bin:${PATH}" \
+	&& mkdir -p debian/build \
+	&& cd debian/build \
+	&& CFLAGS="${CFLAGS} -DG_DISABLE_ASSERT" \
+	&& meson \
+		-Dgupnp=enabled \
+		-Dgstreamer=enabled \
+		-Dgstreamer_1_5=enabled \
+		-Dintrospection=enabled \
+		-Dexamples=disabled \
+		-Dtests=disabled \
+		--prefix=/usr \
+		../../
+
+override_dh_auto_build:
+	cd debian/build && ninja -v
+
+override_dh_auto_test:
+	# Tests are not built.
+	#cd debian/build && ninja test
+	true
+
+override_dh_auto_install:
+	cd debian/build && DESTDIR=${CURDIR}/debian/tmp ninja install
 
 override_dh_install:
 	dh_install --list-missing
@@ -28,5 +45,3 @@ override_dh_installchangelogs:
 
 override_dh_strip:
 	dh_strip --dbgsym-migration='libnice-dbg (<< 0.1.14)'
-
-override_dh_auto_test:
