@@ -1,6 +1,6 @@
 project('libnice', 'c',
-  version: '0.1.16',
-  meson_version : '>= 0.49.1',
+  version: '0.1.17',
+  meson_version : '>= 0.52',
   default_options : ['warning_level=1', 'buildtype=debugoptimized'])
 
 nice_version = meson.project_version()
@@ -15,10 +15,14 @@ else
 endif
 
 # maintain compatibility with the previous libtool versioning
+# libversion has 3 parts A.B.C
+# A is the ABI version, change it if the ABI is broken, changing it resets B and C to 0. It matches soversion
+# B is the ABI age, change it on new APIs that don't break existing ones, changing it resets C to 0
+# C is the revision, change on new updates that don't change APIs
 soversion = 10
-libversion = '10.9.0'
+libversion = '10.10.0'
 
-glib_req = '>= 2.48'
+glib_req = '>= 2.54'
 gnutls_req = '>= 2.12.0'
 gupnp_igd_req = '>= 0.2.4'
 gst_req = '>= 1.0.0'
@@ -28,6 +32,12 @@ nice_datadir = join_paths(get_option('prefix'), get_option('datadir'))
 cc = meson.get_compiler('c')
 
 syslibs = []
+
+if cc.get_id() == 'msvc'
+  add_project_arguments(
+      cc.get_supported_arguments(['/utf-8']), # set the input encoding to utf-8
+      language : 'c')
+endif
 
 if host_machine.system() == 'windows'
   syslibs += [cc.find_library('iphlpapi')]
@@ -111,7 +121,6 @@ message('werror enabled: @0@'.format(werror))
 
 if warning_level >= 2
   warnings += [
-    '-Wextra',
     '-Wundef',
     '-Wnested-externs',
     '-Wwrite-strings',
@@ -180,32 +189,65 @@ gthread_dep = dependency('gthread-2.0',
 
 # Cryto library
 opt_cryptolib = get_option('crypto-library')
-message('Crypto library: ' + opt_cryptolib)
+message('Crypto librar requested: ' + opt_cryptolib)
 if opt_cryptolib != 'openssl'
   crypto_dep = dependency('gnutls', version: gnutls_req, required: false)
   cdata.set('HAVE_GNUTLS', crypto_dep.found())
-  if not crypto_dep.found()
-    if opt_cryptolib != 'auto'
-      error('GnuTLS requested as crypto library, but not found')
-    endif
-    crypto_dep = dependency('openssl', required: false, 
+  if not crypto_dep.found() and opt_cryptolib == 'auto'
+    crypto_dep = dependency('openssl', required: false,
       fallback: ['openssl', 'openssl_dep'])
     cdata.set('HAVE_OPENSSL', crypto_dep.found())
   endif
 else
   crypto_dep = dependency('openssl', required: false)
   cdata.set('HAVE_OPENSSL', crypto_dep.found())
-  if not crypto_dep.found()
-    if opt_cryptolib != 'auto'
-      error('OpenSSL requested as crypto library, but not found')
-    endif
+  if not crypto_dep.found() and openssl == 'auto'
     crypto_dep = dependency('gnutls', version: gnutls_req, required: false)
     cdata.set('HAVE_GNUTLS', crypto_dep.found())
   endif
 endif
 
+if not crypto_dep.found() and opt_cryptolib != 'gnutls'
+  # MSVC builds of OpenSSL does not generate pkg-config files,
+  # so we check for it manually here in this case, if we can't find those files
+  # Based on the CMake check for OpenSSL in CURL's CMakeLists.txt,
+  # on which headers we should check for
+  openssl_headers = []
+  foreach h : ['crypto.h', 'engine.h', 'err.h', 'pem.h',
+               'rsa.h', 'ssl.h', 'x509.h', 'rand.h', 'tls1.h']
+    openssl_headers += 'openssl/' + h
+  endforeach
+
+  # OpenSSL 1.1.x and 1.0.x (or earlier) have different .lib names,
+  # so we need to look for the correct pair
+
+  # Find either libcrypto.lib (1.1.x) or libeay32.lib (1.0.x or earlier) first
+  libcrypto_dep = cc.find_library('crypto', required: false)
+  if libcrypto_dep.found()
+    libssl = 'ssl'
+  else
+    libcrypto_dep = cc.find_library('eay32', required: false)
+    libssl = 'ssleay32'
+  endif
+
+  if libcrypto_dep.found()
+    # Find the corresponding SSL library depending on which crypto .lib we found
+    libssl_dep = cc.find_library(libssl, required: false, has_headers: openssl_headers)
+  endif
+
+  if libcrypto_dep.found() and libssl_dep.found()
+    crypto_dep = [libcrypto_dep, libssl_dep]
+  endif
+endif
+
 if not crypto_dep.found()
-  error('Either GnuTLS or OpenSSL is required as crypto library, but neither was found')
+  if opt_cryptolib == 'gnutls'
+    error('GnuTLS requested as crypto library, but not found')
+  elif opt_cryptolib == 'gnutls'
+    error('OpenSSL requested as crypto library, but not found')
+  else
+    error('Either GnuTLS or OpenSSL is required as crypto library, but neither was found')
+  endif
 endif
 
 # GStreamer
@@ -226,8 +268,12 @@ nice_incs = include_directories('.', 'agent', 'random', 'socket', 'stun')
 nice_deps = gio_deps + [gthread_dep, crypto_dep, gupnp_igd_dep] + syslibs
 
 ignored_iface_prefix = get_option('ignored-network-interface-prefix')
-if ignored_iface_prefix != ''
-  cdata.set_quoted('IGNORED_IFACE_PREFIX', ignored_iface_prefix)
+if ignored_iface_prefix != []
+  ignored_iface_prefix_quoted = []
+  foreach i : ignored_iface_prefix
+    ignored_iface_prefix_quoted += '"' + i + '"'
+  endforeach
+  cdata.set('IGNORED_IFACE_PREFIX', ','.join(ignored_iface_prefix_quoted))
 endif
 
 gir = find_program('g-ir-scanner', required : get_option('introspection'))
@@ -259,5 +305,16 @@ endif
 if not get_option('examples').disabled()
   subdir('examples')
 endif
+
+add_test_setup('valgrind',
+	       exe_wrapper: ['valgrind',
+			     '--leak-check=full',
+			     '--show-reachable=no',
+			     '--error-exitcode=1',
+			     '--suppressions='+meson.current_source_dir()+'/tests/libnice.supp',
+			     '--num-callers=10'],
+	       timeout_multiplier: 10,
+	       env: ['CK_FORK=no']
+	      )
 
 configure_file(output : 'config.h', configuration : cdata)

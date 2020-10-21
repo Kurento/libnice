@@ -69,6 +69,7 @@ typedef struct _IncomingCheck IncomingCheck;
 
 struct _CandidatePairKeepalive
 {
+  guint64 next_tick;    /* next tick timestamp */
   GSource *tick_source;
   guint stream_id;
   guint component_id;
@@ -82,7 +83,7 @@ struct _CandidatePair
   NiceCandidate *local;
   NiceCandidate *remote;
   guint64 priority;           /* candidate pair priority */
-  guint32 prflx_priority;
+  guint32 stun_priority;
   CandidatePairKeepalive keepalive;
 };
 
@@ -309,6 +310,8 @@ gboolean
 nice_component_verify_remote_candidate (NiceComponent *component,
     const NiceAddress *address, NiceSocket *nicesock);
 
+GPtrArray *
+nice_component_get_sockets (NiceComponent *component);
 
 G_END_DECLS
 

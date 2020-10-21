@@ -53,8 +53,6 @@ on_server_connection_available (gpointer user_data)
 {
   server = nice_tcp_passive_socket_accept (passive_sock);
   g_assert (server);
-  nice_socket_free (passive_sock);
-  passive_sock = NULL;
 
   g_main_loop_quit (mainloop);
 
@@ -64,7 +62,7 @@ on_server_connection_available (gpointer user_data)
 static gboolean
 on_server_input_available (gpointer user_data)
 {
-  g_assert (5 == nice_socket_recv (server, &tmp, 5, buf));
+  g_assert_cmpint (5, ==, nice_socket_recv (server, &tmp, 5, buf));
   g_assert (nice_address_equal (&tmp, &client->addr));
 
   g_main_loop_quit (mainloop);
@@ -75,7 +73,7 @@ on_server_input_available (gpointer user_data)
 static gboolean
 on_client_input_available (gpointer user_data)
 {
-  g_assert (5 == nice_socket_recv (client, &tmp, 5, buf));
+  g_assert_cmpint (5, ==, nice_socket_recv (client, &tmp, 5, buf));
   g_assert (nice_address_equal (&tmp, &server->addr));
 
   g_main_loop_quit (mainloop);
@@ -141,16 +139,17 @@ main (void)
   g_assert (nice_address_get_port (&tmp) != 0);
 
 
-  g_assert (5 == nice_socket_send (client, &tmp, 5, "hello"));
+  g_assert_cmpint (5, ==, nice_socket_send (client, &tmp, 5, "hello"));
   g_main_loop_run (mainloop); /* -> on_server_input_available */
   g_assert (0 == strncmp (buf, "hello", 5));
 
-  g_assert (5 == nice_socket_send (server, &tmp, 5, "uryyb"));
+  g_assert_cmpint (5, ==, nice_socket_send (server, &tmp, 5, "uryyb"));
   g_main_loop_run (mainloop); /* -> on_client_input_available */
   g_assert (0 == strncmp (buf, "uryyb", 5));
 
   nice_socket_free (client);
   nice_socket_free (server);
+  nice_socket_free (passive_sock);
 
   g_source_unref (srv_listen_source);
   g_source_unref (srv_input_source);

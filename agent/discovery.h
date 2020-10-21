@@ -49,7 +49,7 @@ typedef struct
   NiceCandidateType type;   /* candidate type STUN or TURN */
   NiceSocket *nicesock;  /* XXX: should be taken from local cand: existing socket to use */
   NiceAddress server;       /* STUN/TURN server address */
-  GTimeVal next_tick;       /* next tick timestamp */
+  gint64 next_tick;       /* next tick timestamp */
   gboolean pending;         /* is discovery in progress? */
   gboolean done;            /* is discovery complete? */
   guint stream_id;
@@ -82,6 +82,7 @@ typedef struct
   gboolean disposing;
   GDestroyNotify destroy_cb;
   gpointer destroy_cb_data;
+  GSource *destroy_source;
 } CandidateRefresh;
 
 void refresh_free (NiceAgent *agent, CandidateRefresh *refresh);
@@ -103,7 +104,8 @@ typedef enum {
   HOST_CANDIDATE_SUCCESS,
   HOST_CANDIDATE_FAILED,
   HOST_CANDIDATE_CANT_CREATE_SOCKET,
-  HOST_CANDIDATE_REDUNDANT
+  HOST_CANDIDATE_REDUNDANT,
+  HOST_CANDIDATE_DUPLICATE_PORT
 } HostCandidateResult;
 
 HostCandidateResult
@@ -148,6 +150,7 @@ discovery_add_peer_reflexive_candidate (
   NiceAgent *agent,
   guint stream_id,
   guint component_id,
+  guint32 priority,
   NiceAddress *address,
   NiceSocket *base_socket,
   NiceCandidate *local,

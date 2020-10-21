@@ -61,13 +61,6 @@
 #include "stun/usages/turn.h"
 #include "socket.h"
 
-static inline int priv_timer_expired (GTimeVal *timer, GTimeVal *now)
-{
-  return (now->tv_sec == timer->tv_sec) ?
-    now->tv_usec >= timer->tv_usec :
-    now->tv_sec >= timer->tv_sec;
-}
-
 /*
  * Frees the CandidateDiscovery structure pointed to
  * by 'user data'. Compatible with g_slist_free_full().
@@ -156,7 +149,7 @@ void discovery_prune_socket (NiceAgent *agent, NiceSocket *sock)
  */
 void refresh_free (NiceAgent *agent, CandidateRefresh *cand)
 {
-  nice_debug ("Freeing candidate refresh %p", cand);
+  nice_debug ("Agent %p : Freeing candidate refresh %p", agent, cand);
 
   agent->refresh_list = g_slist_remove (agent->refresh_list, cand);
 
@@ -168,6 +161,11 @@ void refresh_free (NiceAgent *agent, CandidateRefresh *cand)
   if (cand->tick_source) {
     g_source_destroy (cand->tick_source);
     g_clear_pointer (&cand->tick_source, g_source_unref);
+  }
+
+  if (cand->destroy_source) {
+    g_source_destroy (cand->destroy_source);
+    g_source_unref (cand->destroy_source);
   }
 
   if (cand->destroy_cb) {
@@ -185,7 +183,8 @@ static gboolean on_refresh_remove_timeout (NiceAgent *agent,
       {
         StunTransactionId id;
 
-        nice_debug ("TURN deallocate for refresh %p timed out", cand);
+        nice_debug ("Agent %p : TURN deallocate for refresh %p timed out",
+            agent, cand);
 
         stun_message_id (&cand->stun_message, id);
         stun_agent_forget_transaction (&cand->stun_agent, id);
@@ -194,7 +193,8 @@ static gboolean on_refresh_remove_timeout (NiceAgent *agent,
         break;
       }
     case STUN_USAGE_TIMER_RETURN_RETRANSMIT:
-      nice_debug ("Retransmitting TURN deallocate for refresh %p", cand);
+      nice_debug ("Agent %p : Retransmitting TURN deallocate for refresh %p",
+          agent, cand);
 
       agent_socket_send (cand->nicesock, &cand->server,
           stun_message_length (&cand->stun_message), (gchar *)cand->stun_buffer);
@@ -217,29 +217,28 @@ static gboolean on_refresh_remove_timeout (NiceAgent *agent,
  * sending a refresh request that has zero lifetime. After a response is
  * received or the request times out, 'cand' gets freed and 'cb' is called.
  */
-static gboolean refresh_remove_async (NiceAgent *agent, CandidateRefresh *cand,
-    GDestroyNotify cb, gpointer cb_data)
+static gboolean refresh_remove_async (NiceAgent *agent, gpointer pointer)
 {
   uint8_t *username;
   gsize username_len;
   uint8_t *password;
   gsize password_len;
   size_t buffer_len = 0;
+  CandidateRefresh *cand = (CandidateRefresh *) pointer;
   StunUsageTurnCompatibility turn_compat = agent_to_turn_compatibility (agent);
 
-  if (cand->disposing) {
-    return FALSE;
-  }
-
-  nice_debug ("Sending request to remove TURN allocation for refresh %p", cand);
-
-  cand->disposing = TRUE;
+  nice_debug ("Agent %p : Sending request to remove TURN allocation "
+      "for refresh %p", agent, cand);
 
   if (cand->timer_source != NULL) {
     g_source_destroy (cand->timer_source);
     g_source_unref (cand->timer_source);
     cand->timer_source = NULL;
   }
+
+  g_source_destroy (cand->destroy_source);
+  g_source_unref (cand->destroy_source);
+  cand->destroy_source = NULL;
 
   username = (uint8_t *)cand->candidate->turn->username;
   username_len = (size_t) strlen (cand->candidate->turn->username);
@@ -248,8 +247,10 @@ static gboolean refresh_remove_async (NiceAgent *agent, CandidateRefresh *cand,
 
   if (turn_compat == STUN_USAGE_TURN_COMPATIBILITY_MSN ||
       turn_compat == STUN_USAGE_TURN_COMPATIBILITY_OC2007) {
-    username = g_base64_decode ((gchar *)username, &username_len);
-    password = g_base64_decode ((gchar *)password, &password_len);
+    username = cand->candidate->turn->decoded_username;
+    password = cand->candidate->turn->decoded_password;
+    username_len = cand->candidate->turn->decoded_username_len;
+    password_len = cand->candidate->turn->decoded_password_len;
   }
 
   buffer_len = stun_usage_turn_create_refresh (&cand->stun_agent,
@@ -270,17 +271,7 @@ static gboolean refresh_remove_async (NiceAgent *agent, CandidateRefresh *cand,
         "TURN deallocate retransmission", stun_timer_remainder (&cand->timer),
         (NiceTimeoutLockedCallback) on_refresh_remove_timeout, cand);
   }
-
-  if (turn_compat == STUN_USAGE_TURN_COMPATIBILITY_MSN ||
-      turn_compat == STUN_USAGE_TURN_COMPATIBILITY_OC2007) {
-    g_free (username);
-    g_free (password);
-  }
-
-  cand->destroy_cb = cb;
-  cand->destroy_cb_data = cb_data;
-
-  return TRUE;
+  return G_SOURCE_REMOVE;
 }
 
 typedef struct {
@@ -297,6 +288,7 @@ static void on_refresh_removed (RefreshPruneAsyncData *data)
     agent_timeout_add_with_context (data->agent, &timeout_source,
         "Async refresh prune", 0, data->cb, data->user_data);
 
+    g_source_unref (timeout_source);
     g_free (data);
   }
 }
@@ -306,16 +298,27 @@ static void refresh_prune_async (NiceAgent *agent, GSList *refreshes,
 {
   RefreshPruneAsyncData *data = g_new0 (RefreshPruneAsyncData, 1);
   GSList *it;
+  guint timeout = 0;
 
   data->agent = agent;
   data->user_data = user_data;
   data->cb = function;
 
   for (it = refreshes; it; it = it->next) {
-    if (refresh_remove_async (agent, it->data,
-        (GDestroyNotify) on_refresh_removed, data)) {
-      ++data->items_to_free;
-    }
+    CandidateRefresh *cand = it->data;
+
+    if (cand->disposing)
+      continue;
+
+    timeout += agent->timer_ta;
+    cand->disposing = TRUE;
+    cand->destroy_cb = (GDestroyNotify) on_refresh_removed;
+    cand->destroy_cb_data = data;
+
+    agent_timeout_add_with_context(agent, &cand->destroy_source,
+        "TURN refresh remove async", timeout, refresh_remove_async, cand);
+
+    ++data->items_to_free;
   }
 
   if (data->items_to_free == 0) {
@@ -609,6 +612,36 @@ void priv_generate_candidate_credentials (NiceAgent *agent,
 
 }
 
+static gboolean
+priv_local_host_candidate_duplicate_port (NiceAgent *agent,
+  NiceCandidate *candidate)
+{
+  GSList *i, *j, *k;
+
+  if (candidate->transport == NICE_CANDIDATE_TRANSPORT_TCP_ACTIVE)
+    return FALSE;
+
+  for (i = agent->streams; i; i = i->next) {
+    NiceStream *stream = i->data;
+
+    for (j = stream->components; j; j = j->next) {
+      NiceComponent *component = j->data;
+
+      for (k = component->local_candidates; k; k = k->next) {
+        NiceCandidate *c = k->data;
+
+        if (candidate->transport == c->transport &&
+            nice_address_ip_version (&candidate->addr) ==
+            nice_address_ip_version (&c->addr) &&
+            nice_address_get_port (&candidate->addr) ==
+            nice_address_get_port (&c->addr))
+          return TRUE;
+      }
+    }
+  }
+  return FALSE;
+}
+
 /*
  * Creates a local host candidate for 'component_id' of stream
  * 'stream_id'.
@@ -651,8 +684,6 @@ HostCandidateResult discovery_add_local_host_candidate (
         agent->reliable, FALSE);
   }
 
-  candidate->priority = ensure_unique_priority (stream, component,
-      candidate->priority);
   priv_generate_candidate_credentials (agent, candidate);
   priv_assign_foundation (agent, candidate);
 
@@ -675,6 +706,11 @@ HostCandidateResult discovery_add_local_host_candidate (
   candidate->sockptr = nicesock;
   candidate->addr = nicesock->addr;
   candidate->base_addr = nicesock->addr;
+
+  if (priv_local_host_candidate_duplicate_port (agent, candidate)) {
+    res = HOST_CANDIDATE_DUPLICATE_PORT;
+    goto errors;
+  }
 
   if (!priv_add_local_candidate_pruned (agent, stream_id, component,
           candidate)) {
@@ -743,8 +779,6 @@ discovery_add_server_reflexive_candidate (
         agent->reliable, nat_assisted);
   }
 
-  candidate->priority = ensure_unique_priority (stream, component,
-      candidate->priority);
   priv_generate_candidate_credentials (agent, candidate);
   priv_assign_foundation (agent, candidate);
 
@@ -862,8 +896,6 @@ discovery_add_relay_candidate (
         agent->reliable, FALSE);
   }
 
-  candidate->priority = ensure_unique_priority (stream, component,
-      candidate->priority);
   priv_generate_candidate_credentials (agent, candidate);
 
   /* Google uses the turn username as the candidate username */
@@ -900,6 +932,7 @@ discovery_add_peer_reflexive_candidate (
   NiceAgent *agent,
   guint stream_id,
   guint component_id,
+  guint32 priority,
   NiceAddress *address,
   NiceSocket *base_socket,
   NiceCandidate *local,
@@ -930,22 +963,13 @@ discovery_add_peer_reflexive_candidate (
   candidate->addr = *address;
   candidate->sockptr = base_socket;
   candidate->base_addr = base_socket->addr;
-
-  if (agent->compatibility == NICE_COMPATIBILITY_GOOGLE) {
-    candidate->priority = nice_candidate_jingle_priority (candidate);
-  } else if (agent->compatibility == NICE_COMPATIBILITY_MSN ||
-             agent->compatibility == NICE_COMPATIBILITY_OC2007)  {
-    candidate->priority = nice_candidate_msn_priority (candidate);
-  } else if (agent->compatibility == NICE_COMPATIBILITY_OC2007R2) {
-    candidate->priority =  nice_candidate_ms_ice_priority (candidate,
-        agent->reliable, FALSE);
-  } else {
-    candidate->priority = nice_candidate_ice_priority (candidate,
-        agent->reliable, FALSE);
-  }
-
-  candidate->priority = ensure_unique_priority (stream, component,
-      candidate->priority);
+  /* We don't ensure priority uniqueness in this case, since the
+   * discovered candidate receives the same priority than its
+   * parent pair, by design, RFC 5245, sect 7.1.3.2.1.
+   * Discovering Peer Reflexive Candidates (the priority from the
+   * STUN Request)
+   */
+  candidate->priority = priority;
   priv_assign_foundation (agent, candidate);
 
   if ((agent->compatibility == NICE_COMPATIBILITY_MSN ||
@@ -1105,6 +1129,7 @@ static gboolean priv_discovery_tick_unlocked (NiceAgent *agent)
   CandidateDiscovery *cand;
   GSList *i;
   int not_done = 0; /* note: track whether to continue timer */
+  int need_pacing = 0;
   size_t buffer_len = 0;
 
   {
@@ -1155,8 +1180,10 @@ static gboolean priv_discovery_tick_unlocked (NiceAgent *agent)
 
           if (turn_compat == STUN_USAGE_TURN_COMPATIBILITY_MSN ||
               turn_compat == STUN_USAGE_TURN_COMPATIBILITY_OC2007) {
-            username = g_base64_decode ((gchar *)username, &username_len);
-            password = g_base64_decode ((gchar *)password, &password_len);
+            username = cand->turn->decoded_username;
+            password = cand->turn->decoded_password;
+            username_len = cand->turn->decoded_username_len;
+            password_len = cand->turn->decoded_password_len;
           }
 
           buffer_len = stun_usage_turn_create (&cand->stun_agent,
@@ -1167,15 +1194,12 @@ static gboolean priv_discovery_tick_unlocked (NiceAgent *agent)
               username, username_len,
               password, password_len,
               turn_compat);
-
-          if (turn_compat == STUN_USAGE_TURN_COMPATIBILITY_MSN ||
-              turn_compat == STUN_USAGE_TURN_COMPATIBILITY_OC2007) {
-            g_free (username);
-            g_free (password);
-          }
         }
 
-	if (buffer_len > 0) {
+        if (buffer_len > 0 &&
+            agent_socket_send (cand->nicesock, &cand->server, buffer_len,
+                (gchar *)cand->stun_buffer) >= 0) {
+          /* case: success, start waiting for the result */
           if (nice_socket_is_reliable (cand->nicesock)) {
             stun_timer_start_reliable (&cand->timer, agent->stun_reliable_timeout);
           } else {
@@ -1184,20 +1208,17 @@ static gboolean priv_discovery_tick_unlocked (NiceAgent *agent)
                 agent->stun_max_retransmissions);
           }
 
-          /* send the conncheck */
-          agent_socket_send (cand->nicesock, &cand->server,
-              buffer_len, (gchar *)cand->stun_buffer);
-
-	  /* case: success, start waiting for the result */
-	  g_get_current_time (&cand->next_tick);
-
-	} else {
-	  /* case: error in starting discovery, start the next discovery */
-	  cand->done = TRUE;
-	  cand->stun_message.buffer = NULL;
-	  cand->stun_message.buffer_len = 0;
-	  continue;
-	}
+          cand->next_tick = g_get_monotonic_time ();
+          ++need_pacing;
+        } else {
+          /* case: error in starting discovery, start the next discovery */
+          nice_debug ("Agent %p : Error starting discovery, skipping the item.",
+              agent);
+          cand->done = TRUE;
+          cand->stun_message.buffer = NULL;
+          cand->stun_message.buffer_len = 0;
+          continue;
+        }
       }
       else
 	/* allocate relayed candidates */
@@ -1206,16 +1227,17 @@ static gboolean priv_discovery_tick_unlocked (NiceAgent *agent)
       ++not_done; /* note: new discovery scheduled */
     }
 
-    if (cand->done != TRUE) {
-      GTimeVal now;
+    if (need_pacing)
+      break;
 
-      g_get_current_time (&now);
+    if (cand->done != TRUE) {
+      gint64 now = g_get_monotonic_time ();
 
       if (cand->stun_message.buffer == NULL) {
 	nice_debug ("Agent %p : STUN discovery was cancelled, marking discovery done.", agent);
 	cand->done = TRUE;
       }
-      else if (priv_timer_expired (&cand->next_tick, &now)) {
+      else if (now >= cand->next_tick) {
         switch (stun_timer_refresh (&cand->timer)) {
           case STUN_USAGE_TIMER_RETURN_TIMEOUT:
             {
@@ -1246,18 +1268,17 @@ static gboolean priv_discovery_tick_unlocked (NiceAgent *agent)
                   (gchar *)cand->stun_buffer);
 
               /* note: convert from milli to microseconds for g_time_val_add() */
-              cand->next_tick = now;
-              g_time_val_add (&cand->next_tick, timeout * 1000);
+              cand->next_tick = now + (timeout * 1000);
 
               ++not_done; /* note: retry later */
+              ++need_pacing;
               break;
             }
           case STUN_USAGE_TIMER_RETURN_SUCCESS:
             {
               unsigned int timeout = stun_timer_remainder (&cand->timer);
 
-              cand->next_tick = now;
-              g_time_val_add (&cand->next_tick, timeout * 1000);
+              cand->next_tick = now + (timeout * 1000);
 
               ++not_done; /* note: retry later */
               break;
@@ -1271,6 +1292,9 @@ static gboolean priv_discovery_tick_unlocked (NiceAgent *agent)
 	++not_done; /* note: discovery not expired yet */
       }
     }
+
+    if (need_pacing)
+      break;
   }
 
   if (not_done == 0) {

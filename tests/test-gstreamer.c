@@ -50,18 +50,24 @@ static GstStaticPadTemplate sinktemplate = GST_STATIC_PAD_TEMPLATE ("src",
     GST_STATIC_CAPS_ANY);
 
 GMainLoop *loop;
-gint ready = 0;
+static gint ready = 0;
 
+
+static GCond cond;
 static guint bytes_received;
-guint data_size;
+static guint data_size;
+
 
 static gboolean
 count_bytes (GstBuffer ** buffer, guint idx, gpointer data)
 {
   gsize size = gst_buffer_get_size (*buffer);
 
-  GST_DEBUG ("received %" G_GSIZE_FORMAT " bytes", size);
+  g_debug ("received %" G_GSIZE_FORMAT " bytes", size);
+  g_mutex_lock(&mutex);
   bytes_received += size;
+  g_cond_signal (&cond);
+  g_mutex_unlock (&mutex);
 
   return TRUE;
 }
@@ -72,10 +78,7 @@ sink_chain_list_function (GstPad * pad, GstObject * parent,
 {
   gst_buffer_list_foreach (list, count_bytes, NULL);
 
-  if (data_size <= bytes_received) {
-    GST_DEBUG ("We received expected data size");
-    g_main_loop_quit (loop);
-  }
+  gst_buffer_list_unref (list);
 
   return GST_FLOW_OK;
 }
@@ -85,13 +88,13 @@ sink_chain_function (GstPad * pad, GstObject * parent, GstBuffer * buffer)
 {
   gsize size = gst_buffer_get_size (buffer);
 
-  GST_DEBUG ("received %" G_GSIZE_FORMAT " bytes", size);
+  g_debug ("received %" G_GSIZE_FORMAT " bytes", size);
+  g_mutex_lock(&mutex);
   bytes_received += size;
+  g_cond_signal (&cond);
+  g_mutex_unlock (&mutex);
 
-  if (data_size <= bytes_received) {
-    GST_DEBUG ("We received expected data size");
-    g_main_loop_quit (loop);
-  }
+  gst_buffer_unref (buffer);
 
   return GST_FLOW_OK;
 }
@@ -144,8 +147,8 @@ static void
 recv_cb (NiceAgent * agent,
     guint stream_id, guint component_id, guint len, gchar * buf, gpointer data)
 {
-  GST_INFO ("Received data on agent %" GST_PTR_FORMAT
-      ", stream: %d, compoment: %d", agent, stream_id, component_id);
+  g_debug ("Received data on agent %p, stream: %d, compoment: %d", agent,
+      stream_id, component_id);
 }
 
 static void
@@ -155,7 +158,7 @@ print_candidate (gpointer data, gpointer user_data)
   gchar str_addr[INET6_ADDRSTRLEN];
 
   nice_address_to_string (&cand->addr, str_addr);
-  GST_INFO ("Cadidate: %s:%d", str_addr, nice_address_get_port (&cand->addr));
+  g_debug ("Candidate: %s:%d", str_addr, nice_address_get_port (&cand->addr));
 }
 
 static void
@@ -163,7 +166,7 @@ cb_candidate_gathering_done (NiceAgent * agent, guint stream_id, gpointer data)
 {
   GSList *candidates;
 
-  GST_INFO ("Candidates gathered on agent %" GST_PTR_FORMAT ", stream: %d",
+  g_debug ("Candidates gathered on agent %p, stream: %d",
       agent, stream_id);
 
   candidates = nice_agent_get_local_candidates (agent, stream_id, 1);
@@ -171,7 +174,7 @@ cb_candidate_gathering_done (NiceAgent * agent, guint stream_id, gpointer data)
   nice_agent_set_remote_candidates (NICE_AGENT (data), stream_id, 1,
       candidates);
 
-  GST_INFO ("Got %d candidates", g_slist_length (candidates));
+  g_debug ("Got %d candidates", g_slist_length (candidates));
   g_slist_foreach (candidates, print_candidate, NULL);
 
   g_slist_free_full (candidates, (GDestroyNotify) nice_candidate_free);
@@ -186,8 +189,8 @@ credentials_negotiation (NiceAgent * a_agent, NiceAgent * b_agent,
 
   nice_agent_get_local_credentials (a_agent, a_stream, &user, &passwd);
   nice_agent_set_remote_credentials (b_agent, b_stream, user, passwd);
-  GST_DEBUG_OBJECT (a_agent, "User: %s", user);
-  GST_DEBUG_OBJECT (a_agent, "Passwd: %s", passwd);
+  g_debug ("Agent: %p User: %s", a_agent, user);
+  g_debug ("Agent: %p Passwd: %s", a_agent, passwd);
 
   g_free (user);
   g_free (passwd);
@@ -197,7 +200,7 @@ static void
 cb_component_state_changed (NiceAgent * agent, guint stream_id,
     guint component_id, guint state, gpointer user_data)
 {
-  GST_DEBUG ("State changed: %" GST_PTR_FORMAT " to %s", agent,
+  g_debug ("State changed: %p to %s", agent,
       nice_component_state_to_string (state));
 
   if (state == NICE_COMPONENT_STATE_READY) {
@@ -286,14 +289,22 @@ GST_START_TEST (buffer_list_test)
 
   list = create_buffer_list ();
 
-  GST_DEBUG ("Waiting for agents to be ready ready");
+  g_debug ("Waiting for agents to be ready ready");
 
   g_main_loop_run (loop);
 
   fail_unless_equals_int (gst_pad_push_list (srcpad, list), GST_FLOW_OK);
 
-  GST_DEBUG ("Waiting for buffers");
-  g_main_loop_run (loop);
+  g_debug ("Waiting for buffers");
+
+  g_mutex_lock (&mutex);
+  while (bytes_received < data_size) {
+    g_cond_wait (&cond, &mutex);
+  }
+  g_mutex_unlock (&mutex);
+
+  g_assert_cmpuint (bytes_received, ==, data_size);
+  g_debug ("We received expected data size");
 
   fail_unless_equals_int (data_size, bytes_received);
 
