@@ -1,5 +1,6 @@
-libnice (0.1.16-1) unstable; urgency=medium
+libnice (0.1.16-0kurento1) UNRELEASED; urgency=medium
 
-  * Initial release (Closes: #nnnn)  <nnnn is the bug number of your ITP>
+  * UNRELEASED
+  * Initial debian files
 
- -- Kurento <info@kurento.org>  Wed, 21 Oct 2020 11:50:31 +0200
+ -- Juan Navarro <juan.navarro@gmx.es>  Wed, 21 Oct 2020 11:50:43 +0200
