@@ -8,6 +8,7 @@ ignore_headers = [
   'agent-priv.h',
   'iostream.h',
   'inputstream.h',
+  'candidate-priv.h',
   'outputstream.h',
   'gstnice.h',
   'gstnicesrc.h',
@@ -37,7 +38,6 @@ else
 endif
 
 gnome.gtkdoc('libnice',
-             content_files: [fake_makefile],
              main_xml: 'libnice-docs.xml',
              namespace: 'nice',
              mode: 'none',
