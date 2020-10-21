@@ -88,7 +88,6 @@ NiceAgentClass
 NiceCandidate
 NiceCandidateType
 NiceCandidateTransport
-TurnServer
 NiceRelayType
 NICE_CANDIDATE_MAX_FOUNDATION
 NICE_CANDIDATE_MAX_TURN_SERVERS
@@ -97,6 +96,8 @@ nice_candidate_new
 nice_candidate_free
 nice_candidate_copy
 nice_candidate_equal_target
+nice_candidate_transport_to_string
+nice_candidate_type_to_string
 <SUBSECTION Standard>
 NICE_TYPE_CANDIDATE
 nice_candidate_get_type
@@ -118,6 +119,7 @@ NICE_CANDIDATE_DIRECTION_MS_PREF_ACTIVE
 NICE_CANDIDATE_DIRECTION_MS_PREF_PASSIVE
 NICE_CANDIDATE_TRANSPORT_MS_PREF_TCP
 NICE_CANDIDATE_TRANSPORT_MS_PREF_UDP
+TurnServer
 </SECTION>
 
 <SECTION>
