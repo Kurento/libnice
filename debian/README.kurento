@@ -1,0 +1,51 @@
+External repositories
+=====================
+
+* Upstream: https://gitlab.com/libnice/libnice
+* Debian package: https://salsa.debian.org/telepathy-team/libnice
+
+
+
+Notes about Kurento package
+===========================
+
+This section includes notes about the package configuration files for Kurento,
+and points where this configuration deviates from the original one from the
+Debian package.
+
+* dh_autoreconf: libnice expects that the script autogen.sh is run before trying
+  to build. The Debian maintainers keep committed all the files that get
+  generated. We don't keep those files, instead use "override_dh_autoreconf" to
+  generate them by dynamically calling autogen.sh upon package creation.
+
+  - dh_autoreconf "NOCONFIGURE=1 ./autogen.sh": By default, libnice's autogen.sh
+    runs autoreconf *and* ./configure. But debhelper will run ./configure in the
+    next step, with dh_auto_configure. So using NOCONFIGURE=1 we can avoid
+    running ./configure too early.
+
+  - autogen.sh unconditionally runs `gtkdocize`, so the package "gtk-doc-tools"
+    must be installed.
+
+    UPGRADE: This won't be needed with libnice 0.1.18 which builds with Meson.
+
+* dh_auto_configure:
+
+  - "G_DISABLE_ASSERT": Disable GLib assertions based on `g_assert()`:
+    https://developer.gnome.org/glib/stable/glib-Testing.html
+
+    Aborting whenever an assert doesn't pass in the libnice code has been a
+    source of crashes in Kurento, when a libnice function fails checking correct
+    state (or any other assert).
+
+    This is a VERY BAD IDEA in production servers, where there might be
+    thousands of connections going on, and we cannot afford throwing down the
+    whole server just because libnice happens to go into a bad state on one of
+    those connections.
+
+  - "--with-ignored-network-interface-prefix": Ignore the Docker network
+    interface (docker0) during ICE candidate gathering.
+
+    UPGRADE: This won't be needed with libnice 0.1.17.
+
+  - "--with-gstreamer-1.5": Needed to generate GStreamer packages that can be
+    used with the Kurento fork of GStreamer.
