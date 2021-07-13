@@ -19,7 +19,6 @@ override_dh_auto_configure:
 	&& meson \
 		-Dgupnp=enabled \
 		-Dgstreamer=enabled \
-		-Dgstreamer_1_5=enabled \
 		-Dintrospection=enabled \
 		-Dexamples=disabled \
 		-Dtests=disabled \

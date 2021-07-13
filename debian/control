@@ -8,7 +8,6 @@ Build-Depends: debhelper (>= 10),
                libglib2.0-dev (>= 2.54),
                libgnutls28-dev (>= 2.12.0),
                libgstreamer1.0-dev,
-               libgstreamer1.5-dev,
                libgupnp-igd-1.0-dev (>= 0.2.4),
                ninja-build (>= 1.7),
                python3-pip
@@ -75,24 +74,6 @@ Description: ICE library (GStreamer plugin)
  Nice includes integration with GStreamer1.0.
  .
  This package provides a GStreamer 1.0 plugin for nice.
-
-Package: gstreamer1.5-nice
-Section: net
-Architecture: any
-Depends: ${misc:Depends}, ${shlibs:Depends}
-Multi-Arch: same
-Description: ICE library (GStreamer 1.5 plugin)
- Nice is an implementation of the IETF's draft Interactive Connectivity
- Establishment standard (ICE).  ICE is useful for applications that want to
- establish peer-to-peer UDP data streams. It automates the process of
- traversing NATs and provides security against some attacks.
- .
- Existing standards that use ICE include the Session Initiation Protocol (SIP)
- and the Jingle XMPP extension for audio/video calls.
- .
- Nice includes integration with GStreamer1.5.
- .
- This package provides a GStreamer 1.5 plugin for nice.
 
 Package: gir1.2-nice-0.1
 Section: introspection

@@ -46,9 +46,6 @@ Debian package.
     whole server just because libnice happens to go into a bad state on one of
     those connections.
 
-  - "gstreamer_1_5": Needed to generate GStreamer packages that can be used with
-    the Kurento fork of GStreamer.
-
   - "ignored-network-interface-prefix": This flag was used in the past to ignore
     the Docker network interface (docker0) during ICE candidate gathering. It is
     not needed any more, but still worth documenting here.
