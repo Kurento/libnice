@@ -1,2 +1,3 @@
 0001-Add-Meson-build-config-for-GStreamer-1.5.patch
 0002-Revert-agent-add-nice_agent_get_sockets-API.patch
+0003-agent-set-nonfatal-assertions-to-prevent-aborting-th.patch

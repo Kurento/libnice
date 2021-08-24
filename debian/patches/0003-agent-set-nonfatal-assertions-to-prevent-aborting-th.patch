@@ -1,0 +1,54 @@
+From: Juan Navarro <juan.navarro@gmx.es>
+Date: Tue, 24 Aug 2021 18:33:02 +0200
+Subject: agent: set nonfatal assertions to prevent aborting the process
+
+---
+ agent/agent.c | 21 +++++++++++++++++++++
+ 1 file changed, 21 insertions(+)
+
+diff --git a/agent/agent.c b/agent/agent.c
+index c741046..0054fa4 100644
+--- a/agent/agent.c
++++ b/agent/agent.c
+@@ -1285,6 +1285,13 @@ nice_agent_new (GMainContext *ctx, NiceCompatibility compat)
+       "reliable", FALSE,
+       NULL);
+ 
++#ifdef G_DISABLE_ASSERT
++  if (!g_test_initialized ()) {
++    ((GTestConfig *)g_test_config_vars)->test_initialized = TRUE;
++    g_test_set_nonfatal_assertions ();
++  }
++#endif // G_DISABLE_ASSERT
++
+   return agent;
+ }
+ 
+@@ -1298,6 +1305,13 @@ nice_agent_new_reliable (GMainContext *ctx, NiceCompatibility compat)
+       "reliable", TRUE,
+       NULL);
+ 
++#ifdef G_DISABLE_ASSERT
++  if (!g_test_initialized ()) {
++    ((GTestConfig *)g_test_config_vars)->test_initialized = TRUE;
++    g_test_set_nonfatal_assertions ();
++  }
++#endif // G_DISABLE_ASSERT
++
+   return agent;
+ }
+ 
+@@ -1318,6 +1332,13 @@ nice_agent_new_full (GMainContext *ctx,
+       "support-renomination", (flags & NICE_AGENT_OPTION_SUPPORT_RENOMINATION) ? TRUE : FALSE,
+       NULL);
+ 
++#ifdef G_DISABLE_ASSERT
++  if (!g_test_initialized ()) {
++    ((GTestConfig *)g_test_config_vars)->test_initialized = TRUE;
++    g_test_set_nonfatal_assertions ();
++  }
++#endif // G_DISABLE_ASSERT
++
+   return agent;
+ }
+ 
