@@ -41,7 +41,8 @@ Debian package.
     UPGRADE: This won't be needed with Meson 0.53 on Ubuntu 20.04 (Focal).
 
   - "G_DISABLE_ASSERT": Disable GLib assertions based on `g_assert()`:
-    https://developer.gnome.org/glib/stable/glib-Testing.html
+    https://docs.gtk.org/glib/testing.html
+    https://docs.gtk.org/glib/func.assert.html
 
     Aborting whenever an assert doesn't pass in the libnice code has been a
     source of crashes in Kurento, when a libnice function fails checking correct
