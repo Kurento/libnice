@@ -6,7 +6,7 @@ gst_nice_sources = [
 
 gst_nice_args = ['-DGST_USE_UNSTABLE_API']
 
-gst_plugins_install_dir = join_paths(get_option('libdir'), 'gstreamer-1.0')
+gst_plugins_install_dir = join_paths(get_option('libdir'), 'gstreamer-1.5')
 
 libgstnice = library('gstnice',
   gst_nice_sources,
