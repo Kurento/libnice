@@ -251,7 +251,7 @@ if not crypto_dep.found()
 endif
 
 # GStreamer
-gst_dep = dependency('gstreamer-base-1.0', version: gst_req,
+gst_dep = dependency('gstreamer-base-1.5', version: gst_req,
   required: get_option('gstreamer'),
   fallback : ['gstreamer', 'gst_base_dep'])
 
