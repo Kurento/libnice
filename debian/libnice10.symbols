@@ -34,6 +34,7 @@ libnice.so.10 libnice10 #MINVER#
  nice_agent_get_remote_candidates@Base 0.1.0
  nice_agent_get_selected_pair@Base 0.1.4
  nice_agent_get_selected_socket@Base 0.1.5
+ nice_agent_get_sockets@Base 0.1.18
  nice_agent_get_stream_name@Base 0.1.4
  nice_agent_get_type@Base 0.1.0
  nice_agent_new@Base 0.1.0

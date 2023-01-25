@@ -3,44 +3,24 @@
 # Output every command that modifies files on the build system.
 #export DH_VERBOSE = 1
 
+# Disable runtime assertions. These are OK for development but unacceptable in production!
+export DEB_CFLAGS_MAINT_APPEND=-DG_DISABLE_ASSERT
 
 %:
 	dh $@ --with gir
 
-override_dh_auto_clean:
-	rm -rf debian/build
-
 override_dh_auto_configure:
-	pip3 --no-cache-dir install 'meson >= 0.52, < 0.57' \
-	&& PATH="/usr/local/bin:${PATH}" \
-	&& mkdir -p debian/build \
-	&& cd debian/build \
-	&& CFLAGS="${CFLAGS} -DG_DISABLE_ASSERT" \
-	&& meson \
-		-Dgupnp=enabled \
-		-Dgstreamer=enabled \
-		-Dintrospection=enabled \
-		-Dexamples=disabled \
-		-Dtests=disabled \
-		--prefix=/usr \
-		../../
-
-override_dh_auto_build:
-	cd debian/build && ninja -v
-
-override_dh_auto_test:
-	# Tests are not built.
-	#cd debian/build && ninja test
-	true
-
-override_dh_auto_install:
-	cd debian/build && DESTDIR=${CURDIR}/debian/tmp ninja install
-
-override_dh_install:
-	dh_install --list-missing
+	dh_auto_configure -- -Dgupnp=enabled \
+	                     -Dgstreamer=enabled \
+	                     -Dintrospection=enabled \
+	                     -Dexamples=disabled \
+	                     -Dtests=disabled \
+	                     -Dgtk_doc=disabled
 
 override_dh_installchangelogs:
 	dh_installchangelogs NEWS
 
 override_dh_strip:
 	dh_strip --dbgsym-migration='libnice-dbg (<< 0.1.14)'
+
+override_dh_auto_test:

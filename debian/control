@@ -9,8 +9,7 @@ Build-Depends: debhelper (>= 12),
                libgnutls28-dev (>= 2.12.0),
                libgstreamer1.0-dev,
                libgupnp-igd-1.0-dev (>= 0.2.4),
-               ninja-build (>= 1.7),
-               python3-pip
+               meson (>= 0.52)
 Standards-Version: 4.4.1
 Homepage: https://www.kurento.org/
 Vcs-Git: https://github.com/Kurento/libnice.git
